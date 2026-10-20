@@ -59,7 +59,7 @@ jobs:
           fi
           echo "Android platform directory exists."
 
-      - name: Configure AndroidManifest for localhost cleartext
+      - name: Configure AndroidManifest permissions
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
           if [ ! -f "$MANIFEST" ]; then
@@ -89,12 +89,6 @@ jobs:
                   el = ET.Element("uses-permission")
                   el.set(f"{{{ANDROID_NS}}}name", perm_name)
                   root.insert(0, el)
-
-          app = root.find("application")
-          if app is not None:
-              cleartext_attr = f"{{{ANDROID_NS}}}usesCleartextTraffic"
-              if app.get(cleartext_attr) is None:
-                  app.set(cleartext_attr, "true")
 
           tree.write(p, encoding="utf-8", xml_declaration=True)
 

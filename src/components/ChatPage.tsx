@@ -7,10 +7,8 @@ import {
   Send, Mic, MicOff, Plus, MessageSquare, Trash2,
   Menu, X, Sparkles, Loader2, Volume2, Square, Bot, User, Settings,
   Globe, Brain, Check, X as XIcon, ShieldCheck, BookOpen, Code2, PackageSearch,
-  ExternalLink, Cpu,
+  ExternalLink,
 } from "lucide-react";
-import { loadLocalAISettings, callLocalAI, type LocalAISettings } from "@/lib/localAI";
-import LocalAISettingsModal from "@/components/LocalAISettings";
 import {
   loadVoiceSettings, saveVoiceSettings, createRecognizer, createSpeaker,
   isSTTSupported, isTTSSupported, pickBengaliVoice,
@@ -75,8 +73,6 @@ export default function ChatPage() {
   const [speaking, setSpeaking] = useState(false);
   const [showScope, setShowScope] = useState(false);
   const [scope, setScope] = useState({ scope: "", target: "", relationship: "" });
-  const [showLocalSettings, setShowLocalSettings] = useState(false);
-  const [localAI] = useState<LocalAISettings>(loadLocalAISettings());
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(loadVoiceSettings());
   const [wakeWord, setWakeWord] = useState<WakeWordSettings>(loadWakeWordSettings());
   const [conversationMode, setConversationMode] = useState(false);
@@ -190,55 +186,6 @@ export default function ChatPage() {
       role: m.role,
       content: m.content,
     }));
-
-    // --- Local AI path (opt-in, device-local) ---
-    // If local AI is enabled, try the local endpoint first. This keeps chat
-    // history on-device — it never goes to a cloud provider unless fallback is
-    // enabled and the local server is unreachable.
-    if (localAI.enabled) {
-      const localResult = await callLocalAI(
-        localAI,
-        "You are Rayyan AI, a helpful assistant. Reply in the same language the user writes in.",
-        history,
-        userText,
-        settings.temperature,
-        settings.max_tokens
-      );
-      if (localResult) {
-        const assistantMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          thread_id: thread.id,
-          role: "assistant",
-          content: localResult.reply,
-          created_at: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
-        await supabase.from("chat_messages").insert({
-          thread_id: thread.id,
-          role: "assistant",
-          content: localResult.reply,
-        });
-        if (messages.length === 0) {
-          await supabase
-            .from("chat_threads")
-            .update({ title: userText.slice(0, 40), updated_at: new Date().toISOString() })
-            .eq("id", thread.id);
-          loadThreads();
-        }
-        if (settings.voice_enabled && speaking) {
-          speak(localResult.reply);
-        }
-        setSending(false);
-        return;
-      }
-      // Local call failed.
-      if (!localAI.fallbackToCloud) {
-        setError("লোকাল AI সার্ভারে সংযোগ ব্যর্থ। সার্ভার চালু আছে কিনা যাচাই করুন অথবা ক্লাউড ফলব্যাক চালু করুন।");
-        setSending(false);
-        return;
-      }
-      // Fall through to cloud path.
-    }
 
     try {
       const res = await fetch(`${EDGE_URL}/gemini-chat`, {
@@ -595,18 +542,6 @@ export default function ChatPage() {
           <h1 className="text-lg font-semibold flex-1 truncate">
             {activeThread ? activeThread.title : `New chat with ${settings.app_name}`}
           </h1>
-          {localAI.enabled && (
-            <span className="flex items-center gap-1 text-xs text-cyan-400 bg-cyan-950/40 px-2 py-1 rounded-full">
-              <Cpu className="w-3 h-3" /> লোকাল
-            </span>
-          )}
-          <button
-            onClick={() => setShowLocalSettings(true)}
-            className="p-2 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition"
-            title="লোকাল AI সেটিংস"
-          >
-            <Cpu className="w-5 h-5" />
-          </button>
           {settings.voice_enabled && (
             <button
               onClick={speaking ? stopSpeaking : () => setSpeaking(!speaking)}
@@ -806,9 +741,6 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
-      {showLocalSettings && (
-        <LocalAISettingsModal onClose={() => setShowLocalSettings(false)} />
-      )}
     </div>
   );
 }
