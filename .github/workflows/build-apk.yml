@@ -46,7 +46,7 @@ jobs:
       - name: Install Android SDK packages
         run: |
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
       - name: Add Capacitor Android platform
         run: npx cap add android
@@ -106,9 +106,55 @@ jobs:
       - name: Sync web build to Android
         run: npx cap sync android
 
+      - name: Add missing color resources
+        run: |
+          COLORS=android/app/src/main/res/values/colors.xml
+          if [ ! -f "$COLORS" ]; then
+            cat > "$COLORS" <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="colorPrimary">#3B82F6</color>
+              <color name="colorPrimaryDark">#1E40AF</color>
+              <color name="colorAccent">#10B981</color>
+          </resources>
+          XML
+            echo "Created colors.xml with missing color resources"
+          else
+            echo "colors.xml already exists"
+          fi
+
       - name: Build debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
+
+      - name: Verify APK integrity
+        run: |
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "Error: No APK file found"
+            exit 1
+          fi
+          echo "APK found: $APK"
+          ls -lh "$APK"
+          unzip -t "$APK" > /dev/null 2>&1 || { echo "Error: APK is corrupt"; exit 1; }
+          echo "APK integrity check passed"
+
+      - name: Zipalign APK
+        run: |
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' | head -1)
+          ALIGNED="${APK%.apk}-aligned.apk"
+          ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
+          if [ ! -f "$ZIPALIGN" ]; then
+            ZIPALIGN=$(find "$ANDROID_HOME" -name zipalign -type f | head -1)
+          fi
+          if [ -z "$ZIPALIGN" ] || [ ! -f "$ZIPALIGN" ]; then
+            echo "Warning: zipalign not found, skipping alignment"
+            exit 0
+          fi
+          "$ZIPALIGN" -f 4 "$APK" "$ALIGNED"
+          mv "$ALIGNED" "$APK"
+          echo "APK zipaligned successfully"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -116,4 +162,4 @@ jobs:
           name: rayyan-ai-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           retention-days: 30
-          
+          if-no-files-found: error
