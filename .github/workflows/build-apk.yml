@@ -116,3 +116,4 @@ jobs:
           name: rayyan-ai-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           retention-days: 30
+          
