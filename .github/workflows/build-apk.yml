@@ -67,19 +67,40 @@ jobs:
             exit 1
           fi
           python3 - "$MANIFEST" <<'PY'
-          import sys
+          import sys, xml.etree.ElementTree as ET
+
+          ANDROID_NS = "http://schemas.android.com/apk/res/android"
+          ET.register_namespace("android", ANDROID_NS)
+
           p = sys.argv[1]
-          s = open(p).read()
-          for perm in [
-              '<uses-permission android:name="android.permission.INTERNET" />',
-              '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
-          ]:
-              if perm not in s:
-                  s = s.replace("<manifest ", "<manifest \n    " + perm + "\n    ", 1)
-          if "android:usesCleartextTraffic" not in s:
-              s = s.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
-          open(p, "w").write(s)
-          print(s)
+          tree = ET.parse(p)
+          root = tree.getroot()
+
+          needed = [
+              "android.permission.INTERNET",
+              "android.permission.ACCESS_NETWORK_STATE",
+          ]
+          existing = {
+              el.get(f"{{{ANDROID_NS}}}name")
+              for el in root.findall("uses-permission")
+          }
+          for perm_name in needed:
+              if perm_name not in existing:
+                  el = ET.Element("uses-permission")
+                  el.set(f"{{{ANDROID_NS}}}name", perm_name)
+                  root.insert(0, el)
+
+          app = root.find("application")
+          if app is not None:
+              cleartext_attr = f"{{{ANDROID_NS}}}usesCleartextTraffic"
+              if app.get(cleartext_attr) is None:
+                  app.set(cleartext_attr, "true")
+
+          tree.write(p, encoding="utf-8", xml_declaration=True)
+
+          rewritten = open(p, encoding="utf-8").read()
+          ET.fromstring(rewritten)
+          print(rewritten)
           PY
 
       - name: Sync web build to Android
