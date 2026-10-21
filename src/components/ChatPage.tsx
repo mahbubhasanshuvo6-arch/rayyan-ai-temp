@@ -72,6 +72,7 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [voiceRepliesOn, setVoiceRepliesOn] = useState(false);
   const [showScope, setShowScope] = useState(false);
   const [scope, setScope] = useState({ scope: "", target: "", relationship: "" });
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(loadVoiceSettings());
@@ -296,7 +297,7 @@ export default function ChatPage() {
         content: reply,
       });
 
-      if (settings.voice_enabled && speaking) {
+      if (settings.voice_enabled && voiceRepliesOn) {
         speak(reply);
       }
     } catch (e) {
@@ -566,9 +567,12 @@ export default function ChatPage() {
           </h1>
           {settings.voice_enabled && (
             <button
-              onClick={speaking ? stopSpeaking : () => setSpeaking(!speaking)}
-              className={`p-2 rounded-lg transition ${speaking ? accent.bg + " text-white" : "text-slate-400 hover:bg-slate-800"}`}
-              title={speaking ? "Stop speaking" : "Enable voice replies"}
+              onClick={() => {
+                if (speaking) { stopSpeaking(); setVoiceRepliesOn(false); }
+                else { setVoiceRepliesOn((v) => !v); }
+              }}
+              className={`p-2 rounded-lg transition shrink-0 ${speaking || voiceRepliesOn ? accent.bg + " text-white" : "text-slate-400 hover:bg-slate-800"}`}
+              title={speaking ? "Stop speaking" : voiceRepliesOn ? "Voice replies on — click to disable" : "Enable voice replies"}
             >
               {speaking ? <Square className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
             </button>
