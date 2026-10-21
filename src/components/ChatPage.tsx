@@ -4,10 +4,10 @@ import { useSettings, accentMap } from "@/lib/useSettings";
 import { navigate } from "@/lib/router";
 import type { ChatThread, ChatMessage } from "@/lib/types";
 import {
-  Send, Mic, MicOff, Plus, MessageSquare, Trash2,
+  Mic, MicOff, Plus, MessageSquare, Trash2,
   Menu, X, Sparkles, Loader2, Volume2, Square, Bot, User, Settings,
   Globe, Brain, Check, X as XIcon, ShieldCheck, BookOpen, Code2, PackageSearch,
-  ExternalLink,
+  ExternalLink, ArrowUp, AudioLines, Paperclip,
 } from "lucide-react";
 import {
   loadVoiceSettings, saveVoiceSettings, createRecognizer, createSpeaker,
@@ -78,6 +78,7 @@ export default function ChatPage() {
   const [wakeWord, setWakeWord] = useState<WakeWordSettings>(loadWakeWordSettings());
   const [conversationMode, setConversationMode] = useState(false);
   const [interimText, setInterimText] = useState("");
+  const [showPlusMenu, setShowPlusMenu] = useState(false);
   const ownerLabel = getOrCreateOwnerLabel();
   const { session } = useAuth();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -683,10 +684,11 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="border-t border-slate-800 bg-slate-900/50 backdrop-blur p-3 sm:p-4">
-          <div className="max-w-3xl mx-auto space-y-2">
+        {/* ChatGPT-style fixed bottom input bar */}
+        <div className="bg-slate-950 px-3 sm:px-4 pb-3 sm:pb-4 pt-2">
+          <div className="max-w-3xl mx-auto">
             {settings.cybersec_enabled && settings.cybersec_authorization_required && showScope && (
-              <div className="bg-slate-800/80 border border-slate-700 rounded-xl p-3 space-y-2">
+              <div className="mb-2 bg-slate-800/80 border border-slate-700 rounded-xl p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="flex items-center gap-2 text-xs text-slate-300">
                     <ShieldCheck className="w-3.5 h-3.5" /> Testing scope (advisory)
@@ -703,70 +705,127 @@ export default function ChatPage() {
                 <p className="text-[11px] text-slate-500">Declared scope is a claim, not proof. Rayyan uses it to tailor guidance for authorized testing.</p>
               </div>
             )}
-            <div className="flex items-end gap-1.5 sm:gap-2 min-w-0">
-              {settings.voice_enabled && (
-                <>
-                  <button
-                    onClick={toggleListening}
-                    className={`p-3 rounded-xl transition shrink-0 ${
-                      listening ? "bg-rose-600 text-white animate-pulse" : "bg-slate-800 text-slate-400 hover:text-white"
-                    }`}
-                    title="ভয়েস ইনপুট"
-                  >
-                    {listening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                  </button>
-                  <button
-                    onClick={toggleConversationMode}
-                    className={`p-3 rounded-xl transition shrink-0 ${
-                      conversationMode ? "bg-cyan-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"
-                    }`}
-                    title="কনভার্সেশন মোড — কথা বললে স্বয়ংক্রিয়ভাবে বার্তা পাঠানো হয় এবং উত্তর শোনানো হয়"
-                  >
-                    <Sparkles className="w-5 h-5" />
-                  </button>
-                </>
-              )}
-              {settings.cybersec_enabled && settings.cybersec_authorization_required && (
-                <button
-                  onClick={() => setShowScope((v) => !v)}
-                  className={`p-2.5 sm:p-3 rounded-xl transition shrink-0 ${
-                    showScope || scope.scope || scope.target || scope.relationship
-                      ? "bg-slate-700 text-white"
-                      : "bg-slate-800 text-slate-400 hover:text-white"
-                  }`}
-                  title="Declare testing scope"
-                >
-                  <ShieldCheck className="w-5 h-5" />
-                </button>
-              )}
-              <textarea
-                value={interimText || input}
-                onChange={(e) => { setInput(e.target.value); setInterimText(""); }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage();
-                  }
-                }}
-                placeholder={listening ? (conversationMode ? "শুনছি... কথা বলুন" : "শুনছি...") : `Message ${settings.app_name}...`}
-                rows={1}
-                className="flex-1 min-w-0 bg-slate-800 text-slate-100 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 text-sm resize-none outline-none focus:ring-2 focus:ring-slate-600 max-h-32"
-                style={{ minHeight: "44px" }}
-              />
-              <button
-                onClick={sendMessage}
-                disabled={!input.trim() || sending}
-                className={`p-2.5 sm:p-3 rounded-xl ${accent.bg} text-white disabled:opacity-40 transition shrink-0`}
-              >
-                <Send className="w-5 h-5" />
-              </button>
-            </div>
+
             {conversationMode && (
-              <div className="flex items-center justify-between bg-cyan-950/30 border border-cyan-900 rounded-lg px-3 py-2">
+              <div className="mb-2 flex items-center justify-between bg-cyan-950/30 border border-cyan-900 rounded-lg px-3 py-2">
                 <span className="text-xs text-cyan-300">কনভার্সেশন মোড চালু — কথা বললে স্বয়ংক্রিয়ভাবে পাঠানো হবে এবং উত্তর শোনানো হবে।</span>
                 <button onClick={toggleConversationMode} className="text-cyan-400 hover:text-white text-xs underline">বন্ধ</button>
               </div>
             )}
+
+            {/* Pill-shaped input container */}
+            <div className="relative">
+              <div className="flex items-end gap-2 bg-slate-800 border border-slate-700 rounded-[28px] px-2.5 sm:px-3 py-2 shadow-lg max-h-40 overflow-y-auto">
+                {/* Left: Plus button with dropdown menu */}
+                <div className="relative shrink-0">
+                  <button
+                    onClick={() => setShowPlusMenu((v) => !v)}
+                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0"
+                    title="More options"
+                  >
+                    <Plus className="w-5 h-5" />
+                  </button>
+                  {showPlusMenu && (
+                    <div className="absolute bottom-12 left-0 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50">
+                      <button
+                        onClick={() => { navigate("documents"); setShowPlusMenu(false); }}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                      >
+                        <BookOpen className="w-4 h-4 text-slate-400" /> Upload Document
+                      </button>
+                      <button
+                        onClick={() => { navigate("builder"); setShowPlusMenu(false); }}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                      >
+                        <Sparkles className="w-4 h-4 text-slate-400" /> App Builder
+                      </button>
+                      {settings.cybersec_enabled && settings.cybersec_authorization_required && (
+                        <button
+                          onClick={() => { setShowScope(true); setShowPlusMenu(false); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                        >
+                          <ShieldCheck className="w-4 h-4 text-slate-400" /> Testing Scope
+                        </button>
+                      )}
+                      {settings.voice_enabled && (
+                        <button
+                          onClick={() => { toggleConversationMode(); setShowPlusMenu(false); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                        >
+                          <Sparkles className={`w-4 h-4 ${conversationMode ? "text-cyan-400" : "text-slate-400"}`} /> Conversation Mode
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Center: Textarea */}
+                <textarea
+                  value={interimText || input}
+                  onChange={(e) => { setInput(e.target.value); setInterimText(""); }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  placeholder={listening ? (conversationMode ? "শুনছি... কথা বলুন" : "শুনছি...") : `Message ${settings.app_name}`}
+                  rows={1}
+                  className="flex-1 min-w-0 bg-transparent text-slate-100 placeholder:text-slate-500 px-1 sm:px-2 py-2 text-sm sm:text-[15px] resize-none outline-none max-h-32 leading-relaxed"
+                  style={{ minHeight: "24px" }}
+                />
+
+                {/* Right: Mic + Send/Voice buttons */}
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  {settings.voice_enabled && (
+                    <button
+                      onClick={toggleListening}
+                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition shrink-0 ${
+                        listening
+                          ? "bg-rose-600 text-white animate-pulse"
+                          : "text-slate-400 hover:text-white hover:bg-slate-700"
+                      }`}
+                      title={listening ? "ভয়েস বন্ধ করুন" : "ভয়েস ইনপুট"}
+                    >
+                      {listening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                    </button>
+                  )}
+
+                  {/* Send button (when text) / Blue voice button (when empty) */}
+                  {input.trim() ? (
+                    <button
+                      onClick={sendMessage}
+                      disabled={sending}
+                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full ${accent.bg} text-white disabled:opacity-40 flex items-center justify-center transition shrink-0 hover:opacity-90`}
+                      title="পাঠান"
+                    >
+                      <ArrowUp className="w-5 h-5" />
+                    </button>
+                  ) : settings.voice_enabled ? (
+                    <button
+                      onClick={toggleListening}
+                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full ${accent.bg} text-white flex items-center justify-center transition shrink-0 hover:opacity-90`}
+                      title="ভয়েস ইনপুট"
+                    >
+                      <AudioLines className="w-5 h-5" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={sendMessage}
+                      disabled={sending}
+                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full ${accent.bg} text-white disabled:opacity-40 flex items-center justify-center transition shrink-0`}
+                      title="পাঠান"
+                    >
+                      <ArrowUp className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <p className="text-center text-[11px] text-slate-600 mt-2 hidden sm:block">
+              Rayyan AI can make mistakes. Verify important information.
+            </p>
           </div>
         </div>
       </div>
