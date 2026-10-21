@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 
-export type Route = "chat" | "admin" | "builder";
+export type Route = "chat" | "admin" | "builder" | "documents";
 
 export function getRoute(): Route {
   const h = window.location.hash.replace(/^#\/?/, "");
   if (h.startsWith("admin")) return "admin";
   if (h.startsWith("builder")) return "builder";
+  if (h.startsWith("documents")) return "documents";
   return "chat";
 }
 

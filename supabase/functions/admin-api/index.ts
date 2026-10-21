@@ -276,11 +276,89 @@ Deno.serve(async (req: Request) => {
       }
       const { data, error } = await adminClient
         .from("knowledge_entries")
-        .select("id, user_id, owner_label, thread_id, title, content, tags, source, created_at")
+        .select("id, user_id, owner_label, thread_id, title, content, tags, source, category, visibility, is_shared, document_id, chunk_index, total_chunks, created_at, updated_at")
         .order("created_at", { ascending: false })
         .limit(200);
       if (error) return json({ error: "Failed to load knowledge entries" }, 400);
       return json({ entries: data });
+    }
+
+    // ---- ADD SHARED KNOWLEDGE ENTRY (admin, super_admin) ----
+    if (path === "/knowledge" && req.method === "POST") {
+      if (role !== "admin" && role !== "super_admin") {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const body = await req.json();
+      const title = String(body.title ?? "").trim().slice(0, 200);
+      const content = String(body.content ?? "").trim().slice(0, 50000);
+      const source = String(body.source ?? "admin-shared").trim().slice(0, 64);
+      const category = String(body.category ?? "admin-shared").trim().slice(0, 64);
+      const tagsRaw = Array.isArray(body.tags) ? body.tags : [];
+      const tags = tagsRaw.filter((t: unknown) => typeof t === "string").map((t: string) => String(t).slice(0, 64)).slice(0, 20);
+      const isShared = body.is_shared === true;
+      const visibility = isShared ? "shared" : "private";
+      if (!title || !content) {
+        return json({ error: "Title and content are required." }, 400);
+      }
+      const { data, error } = await adminClient
+        .from("knowledge_entries")
+        .insert({
+          title,
+          content,
+          tags,
+          source,
+          category,
+          visibility,
+          is_shared: isShared,
+        })
+        .select()
+        .maybeSingle();
+      if (error) return json({ error: "Insert failed: " + error.message }, 400);
+      await adminClient.rpc("log_admin_event", {
+        p_action: "add_knowledge",
+        p_detail: JSON.stringify({ title, is_shared: isShared }) as unknown as never,
+        p_target: data?.id ?? "",
+        p_target_type: "knowledge",
+        p_outcome: "success",
+      });
+      return json({ entry: data });
+    }
+
+    // ---- EDIT KNOWLEDGE ENTRY (admin, super_admin) ----
+    if (path.startsWith("/knowledge/") && !path.includes("clear-all") && req.method === "PUT") {
+      if (role !== "admin" && role !== "super_admin") {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const id = path.split("/")[2];
+      const body = await req.json();
+      const patch: Record<string, unknown> = {};
+      if (typeof body.title === "string") patch.title = body.title.trim().slice(0, 200);
+      if (typeof body.content === "string") patch.content = body.content.trim().slice(0, 50000);
+      if (typeof body.source === "string") patch.source = body.source.trim().slice(0, 64);
+      if (typeof body.category === "string") patch.category = body.category.trim().slice(0, 64);
+      if (typeof body.is_shared === "boolean") {
+        patch.is_shared = body.is_shared;
+        patch.visibility = body.is_shared ? "shared" : "private";
+      }
+      if (Array.isArray(body.tags)) {
+        patch.tags = body.tags.filter((t: unknown) => typeof t === "string").map((t: string) => String(t).slice(0, 64)).slice(0, 20);
+      }
+      patch.updated_at = new Date().toISOString();
+      const { data, error } = await adminClient
+        .from("knowledge_entries")
+        .update(patch)
+        .eq("id", id)
+        .select()
+        .maybeSingle();
+      if (error) return json({ error: "Update failed: " + error.message }, 400);
+      await adminClient.rpc("log_admin_event", {
+        p_action: "edit_knowledge",
+        p_detail: JSON.stringify(patch) as unknown as never,
+        p_target: id,
+        p_target_type: "knowledge",
+        p_outcome: "success",
+      });
+      return json({ entry: data });
     }
 
     // ---- DELETE KNOWLEDGE ENTRY (admin, super_admin) ----
@@ -543,6 +621,47 @@ Deno.serve(async (req: Request) => {
         p_detail: JSON.stringify({ target: targetUserId }) as unknown as never,
         p_target: targetUserId,
         p_target_type: "user",
+        p_outcome: "success",
+      });
+      return json({ ok: true });
+    }
+
+    // ---- LIST ALL USER DOCUMENTS (admin, super_admin) ----
+    if (path === "/documents" && req.method === "GET") {
+      if (role !== "admin" && role !== "super_admin") {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const { data, error } = await adminClient
+        .from("user_documents")
+        .select("id, user_id, owner_label, title, file_name, file_type, file_size, chunk_count, status, error_message, created_at, updated_at")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (error) return json({ error: "Failed to load documents" }, 400);
+      return json({ documents: data });
+    }
+
+    // ---- DELETE USER DOCUMENT (super_admin only — cascades to chunks) ----
+    if (path.startsWith("/documents/") && req.method === "DELETE") {
+      if (role !== "super_admin") {
+        return json({ error: "Forbidden: only super admins can delete documents" }, 403);
+      }
+      const id = path.split("/")[2];
+      // Get storage_path before deleting the record
+      const { data: doc } = await adminClient
+        .from("user_documents")
+        .select("storage_path")
+        .eq("id", id)
+        .maybeSingle();
+      if (doc?.storage_path) {
+        await adminClient.storage.from("user-documents").remove([doc.storage_path]);
+      }
+      const { error } = await adminClient.from("user_documents").delete().eq("id", id);
+      if (error) return json({ error: "Delete failed: " + error.message }, 400);
+      await adminClient.rpc("log_admin_event", {
+        p_action: "delete_document",
+        p_detail: JSON.stringify({ id }) as unknown as never,
+        p_target: id,
+        p_target_type: "document",
         p_outcome: "success",
       });
       return json({ ok: true });

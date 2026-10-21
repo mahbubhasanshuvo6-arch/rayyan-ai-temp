@@ -23,6 +23,7 @@
 //
 // Logs every call to api_usage_logs for admin cost tracking.
 // Cybersec upgrade (Phases 1-4): instructions, code review, knowledge, deps.
+// Knowledge Base upgrade: shared + private search, document chunks, Groq injection.
 
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 

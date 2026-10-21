@@ -61,7 +61,29 @@ export interface KnowledgeEntry {
   content: string;
   tags: string[] | null;
   source: string;
+  category: string;
+  visibility: string;
+  is_shared: boolean;
+  document_id: string | null;
+  chunk_index: number | null;
+  total_chunks: number | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface UserDocument {
+  id: string;
+  user_id: string | null;
+  owner_label: string | null;
+  title: string;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  chunk_count: number;
+  status: "pending" | "ready" | "failed";
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Project {
