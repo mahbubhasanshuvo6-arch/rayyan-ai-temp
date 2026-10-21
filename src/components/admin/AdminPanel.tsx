@@ -13,6 +13,7 @@ import {
   DollarSign, Zap, Activity, Trash2, Loader2, KeyRound, Save,
   Sparkles, ShieldCheck, FileCode, BookOpen, Users, ScrollText,
   UserCog, Ban, ShieldOff, Search, Crown, UserCheck, XCircle,
+  Plus, Pencil,
 } from "lucide-react";
 
 type Tab = "dashboard" | "users" | "audit" | "settings" | "projects" | "memory" | "knowledge" | "usage";
@@ -848,13 +849,32 @@ function MemoryTab() {
 }
 
 // ---------- Knowledge ----------
+interface KnowledgeForm {
+  title: string;
+  content: string;
+  tags: string;
+  source: string;
+  category: string;
+  is_shared: boolean;
+}
+
+const emptyForm: KnowledgeForm = {
+  title: "", content: "", tags: "", source: "admin-shared", category: "admin-shared", is_shared: true,
+};
+
 function KnowledgeTab() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<KnowledgeForm>(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setLoading(true);
     const token = await getAuthToken();
     const res = await fetch(`${EDGE_URL}/admin-api/knowledge`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -886,20 +906,187 @@ function KnowledgeTab() {
     load();
   };
 
+  const startAdd = () => {
+    setForm(emptyForm);
+    setEditingId(null);
+    setFormError(null);
+    setShowForm(true);
+  };
+
+  const startEdit = (entry: KnowledgeEntry) => {
+    setForm({
+      title: entry.title,
+      content: entry.content,
+      tags: entry.tags?.join(", ") ?? "",
+      source: entry.source,
+      category: entry.category,
+      is_shared: entry.is_shared,
+    });
+    setEditingId(entry.id);
+    setFormError(null);
+    setShowForm(true);
+  };
+
+  const cancelForm = () => {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(emptyForm);
+    setFormError(null);
+  };
+
+  const save = async () => {
+    if (!form.title.trim() || !form.content.trim()) {
+      setFormError("Title and content are required.");
+      return;
+    }
+    setSaving(true);
+    setFormError(null);
+    const token = await getAuthToken();
+    const tags = form.tags.split(",").map((t) => t.trim()).filter(Boolean);
+    const body = {
+      title: form.title.trim(),
+      content: form.content.trim(),
+      tags,
+      source: form.source.trim(),
+      category: form.category.trim(),
+      is_shared: form.is_shared,
+    };
+    const url = editingId
+      ? `${EDGE_URL}/admin-api/knowledge/${editingId}`
+      : `${EDGE_URL}/admin-api/knowledge`;
+    const method = editingId ? "PUT" : "POST";
+    const res = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const d = await res.json();
+    if (!res.ok) {
+      setFormError(d.error ?? "Save failed.");
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
+    cancelForm();
+    load();
+  };
+
   if (loading) return <Spinner />;
 
   return (
     <div className="max-w-3xl">
+      {showForm && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 rounded-2xl border border-slate-700 p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold flex items-center gap-2">
+                <BookOpen className="w-4 h-4" /> {editingId ? "Edit Knowledge" : "Add Knowledge"}
+              </h3>
+              <button onClick={cancelForm} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Title</label>
+                <input
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  className={inputCls}
+                  placeholder="Entry title"
+                  maxLength={200}
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Content</label>
+                <textarea
+                  value={form.content}
+                  onChange={(e) => setForm({ ...form, content: e.target.value })}
+                  className={`${inputCls} min-h-[120px] resize-y`}
+                  placeholder="Knowledge content..."
+                  maxLength={50000}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Source</label>
+                  <input
+                    value={form.source}
+                    onChange={(e) => setForm({ ...form, source: e.target.value })}
+                    className={inputCls}
+                    placeholder="admin-shared"
+                    maxLength={64}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Category</label>
+                  <input
+                    value={form.category}
+                    onChange={(e) => setForm({ ...form, category: e.target.value })}
+                    className={inputCls}
+                    placeholder="admin-shared"
+                    maxLength={64}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Tags (comma-separated)</label>
+                <input
+                  value={form.tags}
+                  onChange={(e) => setForm({ ...form, tags: e.target.value })}
+                  className={inputCls}
+                  placeholder="science, physics, reference"
+                />
+              </div>
+              <Toggle
+                label="Shared (visible to all users)"
+                value={form.is_shared}
+                onChange={(v) => setForm({ ...form, is_shared: v })}
+              />
+              {formError && (
+                <div className="bg-rose-950/50 border border-rose-800 text-rose-200 rounded-lg px-3 py-2 text-sm">
+                  {formError}
+                </div>
+              )}
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={cancelForm}
+                  className="px-4 py-2 rounded-lg bg-slate-800 text-sm text-slate-300 hover:bg-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={save}
+                  disabled={saving}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm hover:bg-emerald-500 disabled:opacity-40 flex items-center gap-2"
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {editingId ? "Update" : "Add"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-slate-400">{entries.length} knowledge entries</p>
-        {entries.length > 0 && (
-          <button onClick={() => setConfirmClearAll(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-sm hover:bg-rose-950/60">
-            <Trash2 className="w-4 h-4" /> Clear All
+        <div className="flex items-center gap-2">
+          <button
+            onClick={startAdd}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm hover:bg-emerald-500"
+          >
+            <Plus className="w-4 h-4" /> Add
           </button>
-        )}
+          {entries.length > 0 && (
+            <button onClick={() => setConfirmClearAll(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-sm hover:bg-rose-950/60">
+              <Trash2 className="w-4 h-4" /> Clear All
+            </button>
+          )}
+        </div>
       </div>
       {entries.length === 0 ? (
-        <EmptyState text="No knowledge entries yet." />
+        <EmptyState text="No knowledge entries yet. Click Add to create shared knowledge for all users." />
       ) : (
         <div className="space-y-2">
           {entries.map((k) => (
@@ -907,14 +1094,36 @@ function KnowledgeTab() {
               <BookOpen className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-sm truncate">{k.title}</div>
-                <div className="text-xs text-slate-500 mt-0.5">
-                  {k.source}{k.tags && k.tags.length > 0 ? ` · ${k.tags.join(", ")}` : ""}
+                <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
+                  <span>{k.source}</span>
+                  {k.tags && k.tags.length > 0 && <span>· {k.tags.join(", ")}</span>}
+                  {k.is_shared && (
+                    <span className="inline-flex items-center gap-1 text-cyan-400">
+                      <CheckCircle2 className="w-3 h-3" /> Shared
+                    </span>
+                  )}
+                  {k.category === "document-chunk" && (
+                    <span className="text-amber-400">· document chunk</span>
+                  )}
                 </div>
                 <div className="text-sm text-slate-300 mt-1 line-clamp-3">{k.content}</div>
               </div>
-              <button onClick={() => setConfirmId(k.id)} className="text-slate-500 hover:text-rose-400 shrink-0">
-                <Trash2 className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => startEdit(k)}
+                  className="text-slate-500 hover:text-cyan-400 p-1.5 rounded-lg transition"
+                  title="Edit"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setConfirmId(k.id)}
+                  className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg transition"
+                  title="Delete"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           ))}
         </div>

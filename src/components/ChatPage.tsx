@@ -534,6 +534,12 @@ export default function ChatPage() {
 
         <div className="absolute bottom-0 left-0 right-0 p-3 border-t border-slate-800">
           <button
+            onClick={() => navigate("documents")}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition"
+          >
+            <BookOpen className="w-4 h-4" /> My Documents
+          </button>
+          <button
             onClick={() => navigate("builder")}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition"
           >

@@ -2,6 +2,7 @@ import { useAuth } from "@/lib/useAuth";
 import { useRoute } from "@/lib/router";
 import ChatPage from "@/components/ChatPage";
 import BuilderPage from "@/components/BuilderPage";
+import DocumentsPage from "@/components/DocumentsPage";
 import AdminAuth from "@/components/admin/AdminAuth";
 import AdminPanel from "@/components/admin/AdminPanel";
 import { isRecoveryCallback } from "@/lib/supabase";
@@ -41,6 +42,10 @@ export default function App() {
 
   if (route === "builder") {
     return <BuilderPage />;
+  }
+
+  if (route === "documents") {
+    return <DocumentsPage />;
   }
 
   return <ChatPage />;
