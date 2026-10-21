@@ -1039,6 +1039,7 @@ async function retrieveKnowledge(
   }));
   return formatKnowledgeSnippet(entries);
 }
+// retrieveKnowledge: user_id-scoped for authenticated callers, owner_label for anon
 
 // ---------- OSV.dev dependency check (Phase 4, limited) ----------
 // Free API, no key. https://api.osv.dev/v1/querybatch
