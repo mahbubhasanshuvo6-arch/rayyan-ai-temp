@@ -164,20 +164,27 @@ function DashboardTab() {
       fetch(`${EDGE_URL}/admin-api/stats`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-        .then((r) => r.json())
-        .then((d) => {
-          if (d.error) { setError(d.error); return; }
-          setStats(d.stats);
+        .then(async (r) => {
+          const d = await r.json();
+          if (!r.ok || d.error) {
+            setError(d.error ?? `Failed to load dashboard data (HTTP ${r.status}).`);
+            return;
+          }
+          if (d.stats === null || d.stats === undefined) {
+            setError("The server returned no statistics. This may indicate a permissions issue with your admin account.");
+            return;
+          }
+          setStats(d.stats as AdminStats);
           setRole(d.role ?? null);
         })
-        .catch(() => setError("Could not load stats."))
+        .catch(() => setError("Could not reach the server. Please check your connection and try again."))
         .finally(() => setLoading(false));
     });
   }, []);
 
   if (loading) return <Spinner />;
   if (error) return <ErrorBox message={error} />;
-  if (!stats) return <p className="text-slate-400">No data available.</p>;
+  if (!stats) return <ErrorBox message="No dashboard data received from the server." />;
 
   const cards = [
     { label: "Conversations", value: stats.total_threads, icon: MessageSquare },
