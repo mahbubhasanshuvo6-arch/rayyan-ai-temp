@@ -463,7 +463,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100">
+    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden max-w-[100vw]">
       {/* Sidebar */}
       <aside
         className={`fixed lg:relative z-40 h-full w-72 bg-slate-900 border-r border-slate-800 transition-transform duration-300 ${
@@ -534,12 +534,12 @@ export default function ChatPage() {
       )}
 
       {/* Main */}
-      <div className="flex-1 flex flex-col">
-        <header className="flex items-center gap-3 px-4 py-3 border-b border-slate-800 bg-slate-900/50 backdrop-blur">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <header className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 sm:py-3 border-b border-slate-800 bg-slate-900/50 backdrop-blur">
           <button onClick={() => setSidebarOpen(true)} className="lg:hidden text-slate-400 hover:text-white">
             <Menu className="w-5 h-5" />
           </button>
-          <h1 className="text-lg font-semibold flex-1 truncate">
+          <h1 className="text-base sm:text-lg font-semibold flex-1 truncate min-w-0">
             {activeThread ? activeThread.title : `New chat with ${settings.app_name}`}
           </h1>
           {settings.voice_enabled && (
@@ -553,15 +553,15 @@ export default function ChatPage() {
           )}
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden px-3 sm:px-4 py-4 sm:py-6">
           <div className="max-w-3xl mx-auto space-y-4">
             {messages.length === 0 && (
-              <div className="text-center py-20">
-                <div className={`inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br ${accent.gradient} items-center justify-center mb-4`}>
-                  <Sparkles className="w-8 h-8 text-white" />
+              <div className="text-center py-12 sm:py-20 px-2">
+                <div className={`inline-flex w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br ${accent.gradient} items-center justify-center mb-3 sm:mb-4`}>
+                  <Sparkles className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
                 </div>
-                <h2 className="text-2xl font-bold mb-2">{settings.app_name}</h2>
-                <p className="text-slate-400">{settings.tagline}</p>
+                <h2 className="text-xl sm:text-2xl font-bold mb-2">{settings.app_name}</h2>
+                <p className="text-slate-400 text-sm sm:text-base px-2">{settings.tagline}</p>
                 <p className="text-slate-500 text-sm mt-4">Ask me anything — I'm here to help.</p>
               </div>
             )}
@@ -654,7 +654,7 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="border-t border-slate-800 bg-slate-900/50 backdrop-blur p-4">
+        <div className="border-t border-slate-800 bg-slate-900/50 backdrop-blur p-3 sm:p-4">
           <div className="max-w-3xl mx-auto space-y-2">
             {settings.cybersec_enabled && settings.cybersec_authorization_required && showScope && (
               <div className="bg-slate-800/80 border border-slate-700 rounded-xl p-3 space-y-2">
@@ -674,7 +674,7 @@ export default function ChatPage() {
                 <p className="text-[11px] text-slate-500">Declared scope is a claim, not proof. Rayyan uses it to tailor guidance for authorized testing.</p>
               </div>
             )}
-            <div className="flex items-end gap-2">
+            <div className="flex items-end gap-1.5 sm:gap-2 min-w-0">
               {settings.voice_enabled && (
                 <>
                   <button
@@ -700,7 +700,7 @@ export default function ChatPage() {
               {settings.cybersec_enabled && settings.cybersec_authorization_required && (
                 <button
                   onClick={() => setShowScope((v) => !v)}
-                  className={`p-3 rounded-xl transition shrink-0 ${
+                  className={`p-2.5 sm:p-3 rounded-xl transition shrink-0 ${
                     showScope || scope.scope || scope.target || scope.relationship
                       ? "bg-slate-700 text-white"
                       : "bg-slate-800 text-slate-400 hover:text-white"
@@ -721,13 +721,13 @@ export default function ChatPage() {
                 }}
                 placeholder={listening ? (conversationMode ? "শুনছি... কথা বলুন" : "শুনছি...") : `Message ${settings.app_name}...`}
                 rows={1}
-                className="flex-1 bg-slate-800 text-slate-100 rounded-xl px-4 py-3 text-sm resize-none outline-none focus:ring-2 focus:ring-slate-600 max-h-32"
-                style={{ minHeight: "48px" }}
+                className="flex-1 min-w-0 bg-slate-800 text-slate-100 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 text-sm resize-none outline-none focus:ring-2 focus:ring-slate-600 max-h-32"
+                style={{ minHeight: "44px" }}
               />
               <button
                 onClick={sendMessage}
                 disabled={!input.trim() || sending}
-                className={`p-3 rounded-xl ${accent.bg} text-white disabled:opacity-40 transition shrink-0`}
+                className={`p-2.5 sm:p-3 rounded-xl ${accent.bg} text-white disabled:opacity-40 transition shrink-0`}
               >
                 <Send className="w-5 h-5" />
               </button>
