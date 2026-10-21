@@ -156,7 +156,7 @@ export default function ChatPage() {
     if (!thread) {
       const { data, error: te } = await supabase
         .from("chat_threads")
-        .insert({ owner_label: ownerLabel, title: userText.slice(0, 40) })
+        .insert({ owner_label: ownerLabel, title: "New conversation" })
         .select()
         .maybeSingle();
       if (te || !data) {
@@ -295,14 +295,6 @@ export default function ChatPage() {
         role: "assistant",
         content: reply,
       });
-
-      if (messages.length === 0) {
-        await supabase
-          .from("chat_threads")
-          .update({ title: userText.slice(0, 40), updated_at: new Date().toISOString() })
-          .eq("id", thread.id);
-        loadThreads();
-      }
 
       if (settings.voice_enabled && speaking) {
         speak(reply);
@@ -570,7 +562,7 @@ export default function ChatPage() {
             <Menu className="w-5 h-5" />
           </button>
           <h1 className="text-base sm:text-lg font-semibold flex-1 truncate min-w-0">
-            {activeThread ? activeThread.title : `New chat with ${settings.app_name}`}
+            {settings.app_name}
           </h1>
           {settings.voice_enabled && (
             <button
