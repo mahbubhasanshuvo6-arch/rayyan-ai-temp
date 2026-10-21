@@ -910,43 +910,92 @@ async function retrieveMemory(
 }
 
 // ---------- Knowledge retrieval (Phase 3) ----------
-// Owner-scoped keyword search against knowledge_entries. Lightweight ILIKE +
-// tag overlap, deliberately no embeddings (avoids paid services). Returns a
-// prompt snippet string or null.
+// Owner-scoped search against knowledge_entries. Uses pg_trgm similarity for
+// fuzzy matching (handles Bengali Unicode + partial/typo matches) with an
+// ILIKE fallback for exact substring matches. Deliberately no embeddings to
+// avoid paid services. Returns a prompt snippet string or null.
+
+const KNOWLEDGE_STOPWORDS = new Set([
+  "the", "and", "for", "with", "that", "this", "have", "your", "you", "are",
+  "can", "what", "how", "why", "from", "into", "about", "was", "were", "been",
+  "being", "have", "has", "had", "will", "would", "could", "should", "not",
+  "but", "they", "them", "their", "there", "here", "when", "where", "who",
+  "which", "also", "just", "like", "get", "got", "use", "using", "via",
+  "এবং", "এই", "সেই", "তাই", "যেহেতু", "কিন্তু", "অথবা", "নাকি", "যদি",
+  "তবে", "কারণ", "যেমন", "তেমন", "সুতরাং", "অতএব", "প্রতি", "মধ্যে", "উপর",
+]);
+
+function extractSearchTerms(message: string): string[] {
+  const lower = message.toLowerCase();
+  // Latin/ASCII words (3+ chars) and Bengali Unicode words (2+ chars).
+  // Bengali words are typically shorter than English, so 2-char minimum.
+  const latinWords = lower.match(/[a-z0-9_]{3,}/g) ?? [];
+  const bengaliWords = lower.match(/[\u0980-\u09FF]{2,}/g) ?? [];
+  return [...latinWords, ...bengaliWords]
+    .filter((w) => !KNOWLEDGE_STOPWORDS.has(w))
+    .slice(0, 10);
+}
+
 async function retrieveKnowledge(
   supabase: ReturnType<typeof createClient>,
   ownerLabel: string,
   userId: string | null,
   message: string
 ): Promise<string | null> {
-  // Extract up to 8 significant words from the user's message for matching.
-  const words = (message.toLowerCase().match(/[a-z0-9_]{3,}/g) ?? [])
-    .filter((w) => !["the", "and", "for", "with", "that", "this", "have", "your", "you", "are", "can", "what", "how", "why", "from", "into", "about"].includes(w))
-    .slice(0, 8);
-  if (words.length === 0) return null;
+  const terms = extractSearchTerms(message);
+  if (terms.length === 0) return null;
 
-  // Build OR conditions for ILIKE on title and content, plus tag overlap.
+  // Owner scoping — service-role client bypasses RLS, so we filter manually.
+  const ownerFilter = ownerLabel
+    ? { column: "owner_label" as const, value: ownerLabel }
+    : userId
+      ? { column: "user_id" as const, value: userId }
+      : null;
+  if (!ownerFilter) return null;
+
+  // Strategy 1: pg_trgm similarity search via RPC — works for both Bengali and
+  // English, handles partial matches and typos. Uses the existing GIN trigram
+  // indexes. Returns rows ranked by similarity score.
+  // similarity_threshold of 0.1 is deliberately low to catch Bengali partial
+  // matches; we rely on the ORDER BY to surface the best hits first.
+  try {
+    const { data: simData, error: simError } = await supabase.rpc(
+      "search_knowledge_trgm",
+      {
+        p_owner_label: ownerLabel,
+        p_user_id: userId,
+        p_search_text: terms.join(" "),
+        p_limit: 5,
+      }
+    );
+    if (!simError && simData && Array.isArray(simData) && simData.length > 0) {
+      const lines = simData.map((k: { title: string; content: string; tags: string[] | null }) => {
+        const tags = Array.isArray(k.tags) && k.tags.length ? ` [tags: ${k.tags.join(", ")}]` : "";
+        const body = k.content.length > 800 ? k.content.slice(0, 800) + "…" : k.content;
+        return `- ${k.title}${tags}\n  ${body}`;
+      });
+      return "\n\nRelevant knowledge from your library (retrieved for this question):\n" + lines.join("\n");
+    }
+  } catch {
+    // RPC not available or failed — fall through to ILIKE strategy.
+  }
+
+  // Strategy 2: ILIKE fallback — exact substring match on title/content.
+  // Works reliably for both scripts since ILIKE handles Unicode natively in
+  // Postgres. The trigram indexes speed up ILIKE when available.
   const orParts: string[] = [];
-  for (const w of words) {
+  for (const w of terms) {
     orParts.push(`title.ilike.%${w}%`);
     orParts.push(`content.ilike.%${w}%`);
   }
+
   let query = supabase
     .from("knowledge_entries")
     .select("title, content, tags")
     .or(orParts.join(","))
     .order("created_at", { ascending: false })
-    .limit(5);
-
-  // Scope by owner: prefer owner_label match, fall back to user_id match.
-  // The service-role client bypasses RLS, so we filter manually here.
-  if (ownerLabel) {
-    query = query.eq("owner_label", ownerLabel);
-  } else if (userId) {
-    query = query.eq("user_id", userId);
-  } else {
-    return null;
-  }
+    .limit(5)
+    .eq(ownerFilter.column, ownerFilter.value);
 
   const { data, error } = await query;
   if (error || !data || data.length === 0) return null;
