@@ -4,20 +4,10 @@ import { navigate } from "@/lib/router";
 import type { UserDocument } from "@/lib/types";
 import {
   FileText, Upload, Trash2, ArrowLeft, Loader2, AlertCircle,
-  CheckCircle2, FileUp, X, Info,
+  CheckCircle2, FileUp, X, Info, LogIn,
 } from "lucide-react";
 
-const SESSION_LABEL_KEY = "rayyan_owner_label";
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-
-function getOrCreateOwnerLabel(): string {
-  let label = localStorage.getItem(SESSION_LABEL_KEY);
-  if (!label) {
-    label = `anon-${crypto.randomUUID()}`;
-    localStorage.setItem(SESSION_LABEL_KEY, label);
-  }
-  return label;
-}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -34,16 +24,23 @@ export default function DocumentsPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const ownerLabel = getOrCreateOwnerLabel();
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setAuthUserId(data.session?.user?.id ?? null);
+    });
+  }, []);
 
   const load = useCallback(async () => {
+    if (!authUserId) { setLoading(false); return; }
     setLoading(true);
     setError(null);
     try {
       const { data, error: qe } = await supabase
         .from("user_documents")
         .select("id, user_id, owner_label, title, file_name, file_type, file_size, chunk_count, status, error_message, created_at, updated_at")
-        .or(`owner_label.eq.${ownerLabel}`)
+        .eq("user_id", authUserId)
         .order("created_at", { ascending: false });
       if (qe) {
         setError(qe.message);
@@ -54,7 +51,7 @@ export default function DocumentsPage() {
       setError(e instanceof Error ? e.message : "Failed to load documents");
     }
     setLoading(false);
-  }, [ownerLabel]);
+  }, [authUserId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -80,6 +77,15 @@ export default function DocumentsPage() {
     setUploadProgress("Reading file...");
 
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        setError("Please sign in to upload documents.");
+        setUploading(false);
+        setUploadProgress(null);
+        return;
+      }
+
       // Convert file to base64 for JSON API
       const arrayBuffer = await file.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
@@ -92,21 +98,17 @@ export default function DocumentsPage() {
 
       setUploadProgress("Uploading and extracting text...");
 
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-
       const res = await fetch(`${EDGE_URL}/process-document`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           file: base64,
           fileName: file.name,
           fileType: file.type,
           title: file.name.replace(/\.[^.]+$/, ""),
-          ownerLabel,
         }),
       });
 
@@ -175,6 +177,25 @@ export default function DocumentsPage() {
       </header>
 
       <div className="max-w-4xl mx-auto p-4 lg:p-6 space-y-6">
+        {/* Auth gate */}
+        {!authUserId ? (
+          <div className="text-center py-20">
+            <div className="w-16 h-16 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto mb-4">
+              <LogIn className="w-8 h-8 text-slate-400" />
+            </div>
+            <p className="text-slate-300 font-medium mb-2">Sign in required</p>
+            <p className="text-sm text-slate-500 mb-6">
+              You need to be signed in to upload and manage your documents.
+            </p>
+            <button
+              onClick={() => navigate("chat")}
+              className="px-5 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500"
+            >
+              Go to Chat to Sign In
+            </button>
+          </div>
+        ) : (
+          <>
         {/* Upload zone */}
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -316,6 +337,8 @@ export default function DocumentsPage() {
             </div>
           )}
         </div>
+          </>
+        )}
       </div>
 
       {/* Delete confirmation */}

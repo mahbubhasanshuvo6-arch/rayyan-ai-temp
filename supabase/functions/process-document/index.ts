@@ -2,25 +2,31 @@
 // extracts text, splits into chunks, and stores chunks as knowledge_entries.
 //
 // Security:
-//   1. Requires a valid Supabase JWT (user must be authenticated OR have
-//      an owner_label for anon sessions).
+//   1. Requires a valid Supabase JWT — user MUST be authenticated.
+//      No owner_label fallback (Part 1 RLS fix removed anon access).
 //   2. File validation: type check (PDF/TXT only), size limit (10MB),
-//      magic byte check for PDFs.
-//   3. Extracted text is stored as knowledge_entries with document_id
-//      linking back to user_documents. RLS ensures only the owner can
-//      read their own document chunks.
-//   4. Retrieved document content is treated as untrusted input — the
+//      magic byte check for PDFs, binary detection for TXT.
+//   3. Storage path is always `<auth.uid()>/<uuid>-<sanitized-name>` —
+//      the folder name MUST match auth.uid() so Storage RLS allows it.
+//   4. On re-processing (document_id provided), verifies the existing
+//      document belongs to the authenticated user before touching it.
+//   5. Duplicate prevention: if document_id is provided, old chunks are
+//      deleted only AFTER new extraction succeeds. If extraction fails,
+//      old chunks are preserved.
+//   6. Service-role key stays server-side only. User-supplied document_id
+//      and storage_path are NEVER trusted blindly — always verified against
+//      the authenticated user's records.
+//   7. Extracted document text is treated as untrusted input — the
 //      gemini-chat function's system prompt instructs the AI never to
 //      follow instructions embedded inside retrieved documents.
 //
 // Flow:
-//   POST /process-document  (multipart/form-data or JSON with base64)
-//   -> validate file -> upload to storage -> create user_documents row
+//   POST /process-document  (JSON with base64)
+//   -> authenticate -> validate file -> upload to private storage
+//   -> create user_documents row (status=pending)
 //   -> extract text -> chunk -> insert knowledge_entries
 //   -> update user_documents status to 'ready'
-//
-// OCR: not supported in this version. Scanned PDFs (image-only) will
-// produce an empty text result and a clear error message.
+//   On failure: set status='failed', preserve old data if re-processing
 
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
@@ -34,9 +40,9 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-const CHUNK_SIZE = 1000; // characters per chunk
-const CHUNK_OVERLAP = 100; // overlap between chunks for context continuity
-const ALLOWED_TYPES = new Set(["application/pdf", "text/plain", "application/octet-stream"]);
+const CHUNK_SIZE = 1000; // target ~1000 chars per chunk (within 800-1200 range)
+const CHUNK_OVERLAP = 0; // no overlap — avoids duplicate content in knowledge base
+const ALLOWED_EXTENSIONS = new Set(["pdf", "txt"]);
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46]; // %PDF
 
 interface ProcessResult {
@@ -57,51 +63,34 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // ---- Auth ----
+    // ---- Auth: require authenticated user ----
     const authHeader = req.headers.get("Authorization") ?? "";
     const jwt = authHeader.replace("Bearer ", "");
-    if (!jwt) return json({ error: "Unauthorized" }, 401);
+    if (!jwt) return json({ error: "Unauthorized: authentication required." }, 401);
 
     const supabase = createClient(SUPABASE_URL, SERVICE_KEY, {
       auth: { persistSession: false },
     });
 
-    let userId: string | null = null;
-    const { data: ud } = await supabase.auth.getUser(jwt);
-    userId = ud?.user?.id ?? null;
-
-    // Parse request — accept both multipart and JSON
-    let fileBytes: Uint8Array;
-    let fileName: string;
-    let fileType: string;
-    let title: string;
-    let ownerLabel: string | null = null;
-
-    const contentType = req.headers.get("Content-Type") ?? "";
-
-    if (contentType.includes("multipart/form-data")) {
-      const formData = await req.formData();
-      const file = formData.get("file") as File | null;
-      if (!file) return json({ error: "No file provided." }, 400);
-      title = (formData.get("title") as string)?.trim() || file.name;
-      ownerLabel = (formData.get("ownerLabel") as string)?.trim() || null;
-      fileName = file.name;
-      fileType = file.type || guessType(fileName);
-      fileBytes = new Uint8Array(await file.arrayBuffer());
-    } else {
-      // JSON with base64-encoded file
-      const body = await req.json();
-      const base64 = String(body.file ?? "");
-      fileName = String(body.fileName ?? "document");
-      fileType = String(body.fileType ?? guessType(fileName));
-      title = String(body.title ?? fileName).trim();
-      ownerLabel = body.ownerLabel ? String(body.ownerLabel) : null;
-      if (!base64) return json({ error: "No file data provided." }, 400);
-      // Decode base64 to bytes
-      const binary = atob(base64);
-      fileBytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) fileBytes[i] = binary.charCodeAt(i);
+    const { data: authData, error: authError } = await supabase.auth.getUser(jwt);
+    if (authError || !authData?.user?.id) {
+      return json({ error: "Unauthorized: invalid or expired session." }, 401);
     }
+    const userId = authData.user.id;
+
+    // ---- Parse request (JSON with base64-encoded file) ----
+    const body = await req.json();
+    const base64 = String(body.file ?? "");
+    const fileName = String(body.fileName ?? "document");
+    const title = String(body.title ?? fileName).trim();
+    const reprocessDocId = body.documentId ? String(body.documentId) : null;
+
+    if (!base64) return json({ error: "No file data provided." }, 400);
+
+    // Decode base64 to bytes
+    const binary = atob(base64);
+    const fileBytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) fileBytes[i] = binary.charCodeAt(i);
 
     // ---- Validate file ----
     if (fileBytes.length === 0) {
@@ -113,57 +102,95 @@ Deno.serve(async (req: Request) => {
 
     // Determine actual file type by extension + magic bytes
     const ext = fileName.toLowerCase().split(".").pop() ?? "";
-    let detectedType = fileType;
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      return json({ error: `Unsupported file type: .${ext}. Only PDF and TXT files are accepted.` }, 400);
+    }
+
+    let detectedType: "pdf" | "txt";
     if (ext === "pdf" || isPdfMagic(fileBytes)) {
-      detectedType = "application/pdf";
-    } else if (ext === "txt" || isTextFile(fileBytes)) {
-      detectedType = "text/plain";
-    }
-
-    if (detectedType === "application/pdf") {
       if (!isPdfMagic(fileBytes)) {
-        return json({ error: "Invalid PDF file: magic bytes do not match. The file may be corrupted or is not a real PDF." }, 400);
+        return json({ error: "Invalid PDF file: file signature does not match. The file may be corrupted or is not a real PDF." }, 400);
       }
-    } else if (detectedType === "text/plain") {
-      // OK — text files are straightforward
+      detectedType = "pdf";
     } else {
-      return json({ error: `Unsupported file type: ${ext}. Only PDF and TXT files are accepted.` }, 400);
+      if (!isTextFile(fileBytes)) {
+        return json({ error: "File appears to be binary, not a valid text file." }, 400);
+      }
+      detectedType = "txt";
     }
 
-    if (!ownerLabel && !userId) {
-      return json({ error: "Authentication required: either sign in or provide an owner label." }, 401);
+    // ---- Re-processing: verify ownership of existing document ----
+    let existingDocId: string | null = null;
+    let existingStoragePath: string | null = null;
+
+    if (reprocessDocId) {
+      const { data: existing, error: fetchErr } = await supabase
+        .from("user_documents")
+        .select("id, user_id, storage_path")
+        .eq("id", reprocessDocId)
+        .maybeSingle();
+
+      if (fetchErr || !existing) {
+        return json({ error: "Document not found for re-processing." }, 404);
+      }
+      if (existing.user_id !== userId) {
+        return json({ error: "Forbidden: you do not own this document." }, 403);
+      }
+      existingDocId = existing.id;
+      existingStoragePath = existing.storage_path;
     }
 
-    // ---- Create user_documents record ----
-    const storageFolder = userId ?? ownerLabel!;
-    const storagePath = `${storageFolder}/${Date.now()}-${sanitizeFileName(fileName)}`;
+    // ---- Create or reuse user_documents record ----
+    let documentId: string;
+    const storagePath = `${userId}/${crypto.randomUUID()}-${sanitizeFileName(fileName)}`;
 
-    const { data: docRecord, error: docError } = await supabase
-      .from("user_documents")
-      .insert({
-        user_id: userId,
-        owner_label: ownerLabel,
-        title,
-        file_name: fileName,
-        file_type: ext === "pdf" ? "pdf" : "txt",
-        file_size: fileBytes.length,
-        storage_path: storagePath,
-        status: "pending",
-      })
-      .select()
-      .maybeSingle();
+    if (existingDocId) {
+      // Update existing record to pending, keep old chunks until success
+      const { error: updateErr } = await supabase
+        .from("user_documents")
+        .update({
+          title,
+          file_name: fileName,
+          file_type: detectedType,
+          file_size: fileBytes.length,
+          storage_path: storagePath,
+          status: "pending",
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existingDocId);
 
-    if (docError || !docRecord) {
-      return json({ error: "Failed to create document record: " + (docError?.message ?? "unknown") }, 500);
+      if (updateErr) {
+        return json({ error: "Failed to update document record: " + updateErr.message }, 500);
+      }
+      documentId = existingDocId;
+    } else {
+      const { data: docRecord, error: docError } = await supabase
+        .from("user_documents")
+        .insert({
+          user_id: userId,
+          owner_label: null,
+          title,
+          file_name: fileName,
+          file_type: detectedType,
+          file_size: fileBytes.length,
+          storage_path: storagePath,
+          status: "pending",
+        })
+        .select()
+        .maybeSingle();
+
+      if (docError || !docRecord) {
+        return json({ error: "Failed to create document record: " + (docError?.message ?? "unknown") }, 500);
+      }
+      documentId = docRecord.id;
     }
-
-    const documentId = docRecord.id;
 
     // ---- Upload to storage ----
     const { error: uploadError } = await supabase.storage
       .from("user-documents")
       .upload(storagePath, fileBytes, {
-        contentType: detectedType,
+        contentType: detectedType === "pdf" ? "application/pdf" : "text/plain",
         upsert: false,
       });
 
@@ -178,7 +205,7 @@ Deno.serve(async (req: Request) => {
     // ---- Extract text ----
     let extractedText: string;
     try {
-      if (detectedType === "application/pdf") {
+      if (detectedType === "pdf") {
         extractedText = await extractPdfText(fileBytes);
       } else {
         extractedText = decodeText(fileBytes);
@@ -189,7 +216,7 @@ Deno.serve(async (req: Request) => {
         status: "failed",
         error_message: errMsg,
       }).eq("id", documentId);
-      // Clean up the uploaded file since extraction failed
+      // Clean up the new uploaded file (old file preserved if re-processing)
       await supabase.storage.from("user-documents").remove([storagePath]);
       return json({ error: errMsg }, 422);
     }
@@ -201,20 +228,37 @@ Deno.serve(async (req: Request) => {
       await supabase.from("user_documents").update({
         status: "failed",
         error_message: errMsg,
-        content_text: cleanedText || null,
+        content_text: cleanedText.length > 0 ? cleanedText : null,
       }).eq("id", documentId);
       await supabase.storage.from("user-documents").remove([storagePath]);
       return json({ error: errMsg }, 422);
     }
 
     // ---- Chunk the text ----
-    const chunks = chunkText(cleanedText, CHUNK_SIZE, CHUNK_OVERLAP);
+    const chunks = chunkText(cleanedText, CHUNK_SIZE);
     const totalChunks = chunks.length;
+
+    // ---- Replace old chunks if re-processing ----
+    if (existingDocId) {
+      const { error: delErr } = await supabase
+        .from("knowledge_entries")
+        .delete()
+        .eq("document_id", documentId);
+
+      if (delErr) {
+        // Non-fatal: old chunks may remain, but we proceed with new ones
+        console.warn("Failed to delete old chunks:", delErr.message);
+      }
+      // Clean up old storage file
+      if (existingStoragePath && existingStoragePath !== storagePath) {
+        await supabase.storage.from("user-documents").remove([existingStoragePath]);
+      }
+    }
 
     // ---- Insert chunks as knowledge_entries ----
     const entries = chunks.map((chunk, i) => ({
       user_id: userId,
-      owner_label: ownerLabel,
+      owner_label: null,
       title: `${title} (part ${i + 1}/${totalChunks})`,
       content: chunk,
       tags: [] as string[],
@@ -236,6 +280,8 @@ Deno.serve(async (req: Request) => {
         status: "failed",
         error_message: "Failed to store document chunks: " + chunkError.message,
       }).eq("id", documentId);
+      // Don't delete old chunks — we already deleted them above.
+      // The document status reflects the failure.
       return json({ error: "Failed to store document chunks: " + chunkError.message }, 500);
     }
 
@@ -264,65 +310,67 @@ Deno.serve(async (req: Request) => {
 });
 
 // ---- PDF text extraction ----
-// Uses pdf-parse via npm: import for Deno. This works for text-based PDFs.
-// Scanned/image-only PDFs will return empty text — the caller handles that.
+// Uses pdf-parse via npm: import for Deno. Works for text-based PDFs.
+// Scanned/image-only PDFs return empty text — caller handles that.
 async function extractPdfText(bytes: Uint8Array): Promise<string> {
   try {
-    // Dynamic import — pdf-parse is a CommonJS module that reads from a Buffer.
-    // In Deno, we use the npm: specifier to load it.
+    // Buffer polyfill for Deno — pdf-parse expects a Node.js Buffer
+    const { Buffer } = await import("node:buffer");
     const pdfParse = (await import("npm:pdf-parse@1.1.1")).default;
-    // pdf-parse expects a Buffer or Uint8Array
     const buffer = Buffer.from(bytes);
     const data = await pdfParse(buffer);
     return data.text ?? "";
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("ocr") || msg.includes("image") || msg.includes("scan")) {
-      throw new Error("This appears to be a scanned PDF. OCR is not currently supported. Please upload a text-based PDF or a TXT file.");
+    if (msg.includes("ocr") || msg.includes("image") || msg.includes("scan") || msg.includes("empty")) {
+      throw new Error("This appears to be a scanned PDF with no extractable text. OCR is not currently supported. Please upload a text-based PDF or a TXT file.");
     }
     throw new Error(`PDF text extraction failed: ${msg}. The file may be corrupted, encrypted, or a scanned image.`);
   }
 }
 
 // ---- Text decoding ----
-function decodeText(bytes: Uint8Array): Promise<string> {
-  return Promise.resolve(new TextDecoder("utf-8", { fatal: false }).decode(bytes));
+function decodeText(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 }
 
 // ---- Chunking ----
-function chunkText(text: string, size: number, overlap: number): string[] {
+// Splits text into ~CHUNK_SIZE character chunks, trying to break at
+// sentence boundaries (English . ! ? and Bengali ।) or newlines.
+function chunkText(text: string, size: number): string[] {
   if (text.length <= size) return [text];
 
   const chunks: string[] = [];
   let start = 0;
   while (start < text.length) {
     let end = start + size;
-    // Try to break at a sentence boundary or newline near the end
-    if (end < text.length) {
-      const slice = text.slice(start, end);
-      const lastNewline = slice.lastIndexOf("\n");
-      const lastSentence = Math.max(
-        slice.lastIndexOf("।"),
-        slice.lastIndexOf(". "),
-        slice.lastIndexOf("! "),
-        slice.lastIndexOf("? ")
-      );
-      const breakPoint = Math.max(lastNewline, lastSentence);
-      if (breakPoint > size * 0.5) {
-        end = start + breakPoint + 1;
-      }
+    if (end >= text.length) {
+      chunks.push(text.slice(start).trim());
+      break;
     }
-    chunks.push(text.slice(start, end).trim());
-    start = end - overlap;
-    if (start < 0) start = 0;
-    // Avoid infinite loop if overlap >= size
-    if (start >= text.length) break;
-    // Ensure forward progress
+    // Try to break at a sentence boundary or newline in the last 20% of the chunk
+    const searchStart = start + Math.floor(size * 0.8);
+    const slice = text.slice(searchStart, end);
+    const lastNewline = slice.lastIndexOf("\n");
+    const lastSentence = Math.max(
+      slice.lastIndexOf("।"),
+      slice.lastIndexOf(". "),
+      slice.lastIndexOf("! "),
+      slice.lastIndexOf("? "),
+    );
+    const breakOffset = Math.max(lastNewline, lastSentence);
+    if (breakOffset >= 0) {
+      end = searchStart + breakOffset + 1;
+    }
+    const chunk = text.slice(start, end).trim();
+    if (chunk.length > 0) chunks.push(chunk);
+    // Ensure forward progress: next start must be beyond current start
     if (end <= start) {
+      start = start + 1;
+    } else {
       start = end;
     }
   }
-  // Filter out empty chunks
   return chunks.filter((c) => c.length > 0);
 }
 
@@ -342,13 +390,6 @@ function isTextFile(bytes: Uint8Array): boolean {
   }
   // Text files should have very few null bytes
   return nullCount < checkLen * 0.1;
-}
-
-function guessType(fileName: string): string {
-  const ext = fileName.toLowerCase().split(".").pop() ?? "";
-  if (ext === "pdf") return "application/pdf";
-  if (ext === "txt") return "text/plain";
-  return "application/octet-stream";
 }
 
 function sanitizeFileName(name: string): string {
