@@ -15,6 +15,7 @@ import {
   type VoiceSettings, type STTController,
 } from "@/lib/voice";
 import { loadWakeWordSettings, saveWakeWordSettings, detectWakeWord, WAKE_WORD_STATUS_NOTE, type WakeWordSettings } from "@/lib/wakeWord";
+import { useAuth } from "@/lib/useAuth";
 
 const SESSION_LABEL_KEY = "rayyan_owner_label";
 
@@ -78,6 +79,7 @@ export default function ChatPage() {
   const [conversationMode, setConversationMode] = useState(false);
   const [interimText, setInterimText] = useState("");
   const ownerLabel = getOrCreateOwnerLabel();
+  const { session } = useAuth();
   const scrollRef = useRef<HTMLDivElement>(null);
   const sttRef = useRef<STTController | null>(null);
   const ttsRef = useRef<ReturnType<typeof createSpeaker> | null>(null);
@@ -206,17 +208,18 @@ export default function ChatPage() {
     }
 
     try {
+      const authToken = session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY;
       const res = await fetch(`${EDGE_URL}/gemini-chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({
           mode: "chat",
           message: userText,
           history,
-          ownerLabel,
+          ownerLabel: session ? null : ownerLabel,
           memory: memoryStrings.length > 0 ? memoryStrings : undefined,
           authorization:
             scope.scope || scope.target || scope.relationship
@@ -315,17 +318,18 @@ export default function ChatPage() {
     setSending(true);
     setError(null);
     try {
+      const authToken = session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY;
       const res = await fetch(`${EDGE_URL}/gemini-chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({
           mode: "chat",
           message: pendingTool.userText,
           history: pendingTool.history,
-          ownerLabel,
+          ownerLabel: session ? null : ownerLabel,
           confirmed: true,
         }),
       });

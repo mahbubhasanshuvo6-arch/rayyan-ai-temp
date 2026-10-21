@@ -960,7 +960,7 @@ function formatKnowledgeSnippet(entries: KnowledgeResult[]): string {
 
 async function retrieveKnowledge(
   supabase: ReturnType<typeof createClient>,
-  ownerLabel: string,
+  ownerLabel: string | null,
   userId: string | null,
   message: string
 ): Promise<string | null> {
@@ -968,15 +968,23 @@ async function retrieveKnowledge(
   if (terms.length === 0) return null;
   if (!ownerLabel && !userId) return null;
 
+  // For authenticated users (userId present), search by user_id so document
+  // chunks (owner_label=NULL, user_id=<uid>) are matched. For anon users,
+  // fall back to owner_label for legacy entries.
+  const rpcOwnerLabel = userId ? null : ownerLabel;
+  const rpcUserId = userId;
+
   // Strategy 1: pg_trgm similarity search via RPC — searches both the user's
   // private entries AND admin-managed shared entries. Handles Bengali Unicode,
   // partial matches, and typos via the existing GIN trigram indexes.
+  // The function uses auth.uid() for direct authenticated calls, or p_user_id
+  // for service-role calls (verified by the edge function via JWT).
   try {
     const { data: simData, error: simError } = await supabase.rpc(
       "search_knowledge_trgm",
       {
-        p_owner_label: ownerLabel,
-        p_user_id: userId,
+        p_owner_label: rpcOwnerLabel,
+        p_user_id: rpcUserId,
         p_search_text: terms.join(" "),
         p_limit: 5,
         p_include_shared: true,
@@ -998,18 +1006,24 @@ async function retrieveKnowledge(
   }
 
   // Strategy 2: ILIKE fallback — exact substring match on title/content.
-  // Searches both private (owner-scoped) and shared entries.
+  // Searches both private (owner-scoped or user-scoped) and shared entries.
   const orParts: string[] = [];
   for (const w of terms) {
     orParts.push(`title.ilike.%${w}%`);
     orParts.push(`content.ilike.%${w}%`);
   }
 
+  // Build the ownership filter: for authenticated users, match user_id;
+  // for anon users, match owner_label. Always include shared entries.
+  const ownerFilter = userId
+    ? `is_shared.eq.true,user_id.eq.${userId}`
+    : `is_shared.eq.true,owner_label.eq.${ownerLabel}`;
+
   const { data, error } = await supabase
     .from("knowledge_entries")
     .select("title, content, tags, source, category, is_shared")
     .or(orParts.join(","))
-    .or(`is_shared.eq.true,owner_label.eq.${ownerLabel}`)
+    .or(ownerFilter)
     .order("created_at", { ascending: false })
     .limit(5);
 
