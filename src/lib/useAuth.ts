@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
+import type { AdminRole } from "./types";
 
 export interface AuthState {
   session: Session | null;
   isAdmin: boolean;
+  adminRole: AdminRole | null;
   loading: boolean;
   signOut: () => Promise<void>;
 }
@@ -35,5 +37,9 @@ export function useAuth(): AuthState {
     !!session &&
     (session.user.app_metadata?.is_admin as boolean) === true;
 
-  return { session, isAdmin, loading, signOut };
+  const adminRole = session
+    ? (session.user.app_metadata?.admin_role as AdminRole) ?? null
+    : null;
+
+  return { session, isAdmin, adminRole, loading, signOut };
 }

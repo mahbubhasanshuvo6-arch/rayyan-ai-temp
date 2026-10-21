@@ -3,15 +3,51 @@ import { supabase, EDGE_URL } from "@/lib/supabase";
 import { useSettings, accentMap } from "@/lib/useSettings";
 import type { AuthState } from "@/lib/useAuth";
 import { navigate } from "@/lib/router";
-import type { AppSettings, AdminStats, Project, MemoryEntry, KnowledgeEntry, UsageLog } from "@/lib/types";
+import type {
+  AppSettings, AdminStats, AdminRole, AdminUser, AuditEvent,
+  Project, MemoryEntry, KnowledgeEntry, UsageLog,
+} from "@/lib/types";
 import {
   LayoutDashboard, Settings, FolderGit2, Brain, BarChart3,
   LogOut, Menu, X, MessageSquare, AlertTriangle, CheckCircle2,
   DollarSign, Zap, Activity, Trash2, Loader2, KeyRound, Save,
-  Sparkles, ShieldCheck, FileCode, BookOpen, Lock,
+  Sparkles, ShieldCheck, FileCode, BookOpen, Users, ScrollText,
+  UserCog, Ban, ShieldOff, Search, Crown, UserCheck, XCircle,
 } from "lucide-react";
 
-type Tab = "dashboard" | "settings" | "projects" | "memory" | "knowledge" | "usage";
+type Tab = "dashboard" | "users" | "audit" | "settings" | "projects" | "memory" | "knowledge" | "usage";
+
+function getAuthToken(): Promise<string> {
+  return supabase.auth.getSession().then(({ data }) => data.session?.access_token ?? "");
+}
+
+function roleLabel(role: AdminRole): string {
+  if (role === "super_admin") return "Super Admin";
+  if (role === "admin") return "Admin";
+  return "Support";
+}
+
+function roleBadge(role: AdminRole | null, suspended: boolean) {
+  if (!role) return null;
+  if (suspended) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-rose-950/50 border border-rose-800 text-rose-300">
+        <ShieldOff className="w-3 h-3" /> Suspended
+      </span>
+    );
+  }
+  const cls = role === "super_admin"
+    ? "bg-amber-950/50 border-amber-700 text-amber-300"
+    : role === "admin"
+    ? "bg-cyan-950/50 border-cyan-800 text-cyan-300"
+    : "bg-slate-800 border-slate-600 text-slate-300";
+  const Icon = role === "super_admin" ? Crown : role === "admin" ? ShieldCheck : UserCheck;
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${cls}`}>
+      <Icon className="w-3 h-3" /> {roleLabel(role)}
+    </span>
+  );
+}
 
 export default function AdminPanel({ auth }: { auth: AuthState }) {
   const { settings } = useSettings();
@@ -19,14 +55,22 @@ export default function AdminPanel({ auth }: { auth: AuthState }) {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const navItems: { id: Tab; label: string; icon: any }[] = [
-    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "settings", label: "Settings", icon: Settings },
-    { id: "projects", label: "Projects", icon: FolderGit2 },
-    { id: "memory", label: "Memory", icon: Brain },
-    { id: "knowledge", label: "Knowledge", icon: BookOpen },
-    { id: "usage", label: "API Usage", icon: BarChart3 },
+  const role = auth.adminRole;
+
+  const allNavItems: { id: Tab; label: string; icon: any; roles: AdminRole[] }[] = [
+    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["super_admin", "admin", "support"] },
+    { id: "users", label: "Users", icon: Users, roles: ["super_admin"] },
+    { id: "audit", label: "Audit Logs", icon: ScrollText, roles: ["super_admin", "admin", "support"] },
+    { id: "settings", label: "Settings", icon: Settings, roles: ["super_admin", "admin"] },
+    { id: "projects", label: "Projects", icon: FolderGit2, roles: ["super_admin", "admin"] },
+    { id: "memory", label: "Memory", icon: Brain, roles: ["super_admin", "admin"] },
+    { id: "knowledge", label: "Knowledge", icon: BookOpen, roles: ["super_admin", "admin"] },
+    { id: "usage", label: "API Usage", icon: BarChart3, roles: ["super_admin", "admin", "support"] },
   ];
+
+  const navItems = allNavItems.filter((item) =>
+    role ? item.roles.includes(role) : false
+  );
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex">
@@ -40,7 +84,10 @@ export default function AdminPanel({ auth }: { auth: AuthState }) {
             <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${accent.gradient} flex items-center justify-center`}>
               <ShieldCheck className="w-5 h-5 text-white" />
             </div>
-            <span className="font-semibold">Admin</span>
+            <div>
+              <div className="font-semibold text-sm">Admin Panel</div>
+              {role && <div className="text-[10px] text-slate-500">{roleLabel(role)}</div>}
+            </div>
           </div>
           <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-slate-400">
             <X className="w-5 h-5" />
@@ -83,11 +130,17 @@ export default function AdminPanel({ auth }: { auth: AuthState }) {
           <button onClick={() => setSidebarOpen(true)} className="lg:hidden text-slate-400">
             <Menu className="w-5 h-5" />
           </button>
-          <h1 className="text-lg font-semibold capitalize">{tab}</h1>
+          <h1 className="text-lg font-semibold capitalize flex-1">{tab === "audit" ? "Audit Logs" : tab}</h1>
+          {auth.session?.user?.email && (
+            <span className="text-xs text-slate-500 hidden sm:block truncate max-w-[200px]">{auth.session.user.email}</span>
+          )}
+          {role && roleBadge(role, false)}
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 lg:p-6">
           {tab === "dashboard" && <DashboardTab />}
+          {tab === "users" && <UsersTab currentUserId={auth.session?.user?.id ?? ""} />}
+          {tab === "audit" && <AuditTab />}
           {tab === "settings" && <SettingsTab />}
           {tab === "projects" && <ProjectsTab />}
           {tab === "memory" && <MemoryTab />}
@@ -102,22 +155,29 @@ export default function AdminPanel({ auth }: { auth: AuthState }) {
 // ---------- Dashboard ----------
 function DashboardTab() {
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [role, setRole] = useState<AdminRole | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const jwt = supabase.auth.getSession().then(({ data }) => {
+    getAuthToken().then((token) => {
       fetch(`${EDGE_URL}/admin-api/stats`, {
-        headers: { Authorization: `Bearer ${data.session?.access_token ?? ""}` },
+        headers: { Authorization: `Bearer ${token}` },
       })
         .then((r) => r.json())
-        .then((d) => setStats(d.stats))
+        .then((d) => {
+          if (d.error) { setError(d.error); return; }
+          setStats(d.stats);
+          setRole(d.role ?? null);
+        })
+        .catch(() => setError("Could not load stats."))
         .finally(() => setLoading(false));
     });
-    return () => void jwt;
   }, []);
 
   if (loading) return <Spinner />;
-  if (!stats) return <p className="text-slate-400">Could not load stats.</p>;
+  if (error) return <ErrorBox message={error} />;
+  if (!stats) return <p className="text-slate-400">No data available.</p>;
 
   const cards = [
     { label: "Conversations", value: stats.total_threads, icon: MessageSquare },
@@ -172,7 +232,7 @@ function DashboardTab() {
           <AlertTriangle className="w-4 h-4 text-amber-400" /> Recent Errors
         </h3>
         {stats.recent_errors.length === 0 ? (
-          <p className="text-sm text-slate-500">No errors recorded.</p>
+          <EmptyState text="No errors recorded." />
         ) : (
           <div className="space-y-2">
             {stats.recent_errors.map((e, i) => (
@@ -187,6 +247,272 @@ function DashboardTab() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------- Users ----------
+function UsersTab({ currentUserId }: { currentUserId: string }) {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{
+    type: "grant" | "revoke" | "suspend" | "unsuspend" | "ban" | "unban";
+    userId: string;
+    email: string;
+    role?: AdminRole;
+  } | null>(null);
+
+  const load = useCallback(async (q?: string) => {
+    setLoading(true);
+    setError(null);
+    const token = await getAuthToken();
+    const params = q ? `?search=${encodeURIComponent(q)}` : "";
+    const res = await fetch(`${EDGE_URL}/admin-api/users${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const d = await res.json();
+    if (!res.ok) { setError(d.error ?? "Failed to load users"); }
+    setUsers(d.users ?? []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const doAction = async () => {
+    if (!confirmAction) return;
+    setActionLoading(confirmAction.userId + confirmAction.type);
+    const token = await getAuthToken();
+    try {
+      let endpoint = "";
+      let body: Record<string, unknown> = { userId: confirmAction.userId };
+      if (confirmAction.type === "grant") {
+        endpoint = "/users/grant";
+        body.role = confirmAction.role ?? "admin";
+      } else if (confirmAction.type === "revoke") {
+        endpoint = "/users/revoke";
+      } else if (confirmAction.type === "suspend" || confirmAction.type === "unsuspend") {
+        endpoint = "/users/suspend";
+        body.suspended = confirmAction.type === "suspend";
+      } else if (confirmAction.type === "ban" || confirmAction.type === "unban") {
+        endpoint = "/users/ban";
+        body.banned = confirmAction.type === "ban";
+      }
+      const res = await fetch(`${EDGE_URL}/admin-api${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const d = await res.json();
+      if (!res.ok) { setError(d.error ?? "Action failed"); }
+      else { setError(null); load(search); }
+    } catch {
+      setError("Network error");
+    } finally {
+      setActionLoading(null);
+      setConfirmAction(null);
+    }
+  };
+
+  const confirmText = confirmAction ? {
+    grant: `Grant ${roleLabel(confirmAction.role ?? "admin")} role to ${confirmAction.email}?`,
+    revoke: `Revoke admin privileges from ${confirmAction.email}? They will lose all admin access.`,
+    suspend: `Suspend admin ${confirmAction.email}? They will be unable to access the admin panel.`,
+    unsuspend: `Restore admin access for ${confirmAction.email}?`,
+    ban: `Ban user ${confirmAction.email}? They will be unable to sign in.`,
+    unban: `Unban user ${confirmAction.email}?`,
+  }[confirmAction.type] : "";
+
+  return (
+    <div className="max-w-4xl space-y-4">
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") load(search); }}
+            placeholder="Search by email..."
+            className="w-full bg-slate-900 text-white rounded-lg pl-10 pr-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-600 border border-slate-800"
+          />
+        </div>
+        <button
+          onClick={() => load(search)}
+          className="px-4 py-2 rounded-lg bg-slate-800 text-sm hover:bg-slate-700"
+        >
+          Search
+        </button>
+      </div>
+
+      {error && <ErrorBox message={error} />}
+
+      {loading ? (
+        <Spinner />
+      ) : users.length === 0 ? (
+        <EmptyState text="No users found." />
+      ) : (
+        <div className="space-y-2">
+          {users.map((u) => (
+            <div key={u.id} className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm truncate">{u.email}</span>
+                    {u.banned && (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-rose-950/50 border border-rose-800 text-rose-300">
+                        <Ban className="w-3 h-3" /> Banned
+                      </span>
+                    )}
+                    {roleBadge(u.admin_role, u.admin_suspended)}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    Joined {new Date(u.created_at).toLocaleDateString()}
+                    {u.last_sign_in_at && ` · Last sign-in ${new Date(u.last_sign_in_at).toLocaleDateString()}`}
+                  </div>
+                </div>
+                {u.id !== currentUserId && (
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {!u.admin_role && (
+                      <IconBtn
+                        icon={ShieldCheck}
+                        label="Make Admin"
+                        onClick={() => setConfirmAction({ type: "grant", userId: u.id, email: u.email, role: "admin" })}
+                        color="cyan"
+                      />
+                    )}
+                    {u.admin_role && (
+                      <>
+                        {u.admin_role !== "super_admin" && (
+                          <IconBtn
+                            icon={Crown}
+                            label="Super Admin"
+                            onClick={() => setConfirmAction({ type: "grant", userId: u.id, email: u.email, role: "super_admin" })}
+                            color="amber"
+                          />
+                        )}
+                        {u.admin_role !== "support" && (
+                          <IconBtn
+                            icon={UserCheck}
+                            label="Support"
+                            onClick={() => setConfirmAction({ type: "grant", userId: u.id, email: u.email, role: "support" })}
+                            color="slate"
+                          />
+                        )}
+                        {u.admin_suspended ? (
+                          <IconBtn
+                            icon={ShieldCheck}
+                            label="Restore"
+                            onClick={() => setConfirmAction({ type: "unsuspend", userId: u.id, email: u.email })}
+                            color="emerald"
+                          />
+                        ) : (
+                          <IconBtn
+                            icon={ShieldOff}
+                            label="Suspend"
+                            onClick={() => setConfirmAction({ type: "suspend", userId: u.id, email: u.email })}
+                            color="rose"
+                          />
+                        )}
+                        <IconBtn
+                          icon={XCircle}
+                          label="Revoke"
+                          onClick={() => setConfirmAction({ type: "revoke", userId: u.id, email: u.email })}
+                          color="rose"
+                        />
+                      </>
+                    )}
+                    {u.banned ? (
+                      <IconBtn
+                        icon={CheckCircle2}
+                        label="Unban"
+                        onClick={() => setConfirmAction({ type: "unban", userId: u.id, email: u.email })}
+                        color="emerald"
+                      />
+                    ) : (
+                      <IconBtn
+                        icon={Ban}
+                        label="Ban"
+                        onClick={() => setConfirmAction({ type: "ban", userId: u.id, email: u.email })}
+                        color="rose"
+                      />
+                    )}
+                  </div>
+                )}
+                {u.id === currentUserId && (
+                  <span className="text-xs text-slate-500 italic">You</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {confirmAction && (
+        <ConfirmDialog
+          text={confirmText}
+          loading={actionLoading === confirmAction.userId + confirmAction.type}
+          onConfirm={doAction}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------- Audit Logs ----------
+function AuditTab() {
+  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getAuthToken().then((token) => {
+      fetch(`${EDGE_URL}/admin-api/events`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.error) { setError(d.error); return; }
+          setEvents(d.events ?? []);
+        })
+        .catch(() => setError("Failed to load audit logs."))
+        .finally(() => setLoading(false));
+    });
+  }, []);
+
+  if (loading) return <Spinner />;
+  if (error) return <ErrorBox message={error} />;
+
+  return (
+    <div className="max-w-4xl">
+      {events.length === 0 ? (
+        <EmptyState text="No audit events recorded yet." />
+      ) : (
+        <div className="space-y-2">
+          {events.map((e) => (
+            <div key={e.id} className="bg-slate-900 rounded-lg border border-slate-800 p-3 text-sm">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${
+                    e.outcome === "success" ? "bg-emerald-400" :
+                    e.outcome === "denied" ? "bg-rose-400" : "bg-amber-400"
+                  }`} />
+                  <span className="font-medium">{e.action}</span>
+                  {e.target_type && (
+                    <span className="text-xs text-slate-500">→ {e.target_type}: {e.target ?? "—"}</span>
+                  )}
+                </div>
+                <span className="text-xs text-slate-500">{new Date(e.created_at).toLocaleString()}</span>
+              </div>
+              <div className="text-xs text-slate-500 mt-1">
+                Actor: {e.admin_id ? e.admin_id.slice(0, 8) : "system"} · {e.outcome}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -210,57 +536,40 @@ function SettingsTab() {
     setSaving(true);
     setSaved(false);
     try {
-      const { data: sess } = await supabase.auth.getSession();
-      if (!sess.session?.access_token) {
-        setSaveError("Your admin session has expired. Please log in again.");
-        setSaving(false);
-        return;
-      }
+      const token = await getAuthToken();
       const res = await fetch(`${EDGE_URL}/admin-api/settings`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sess.session.access_token}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(form),
       });
       const d = await res.json();
-      if (!res.ok) {
-        setSaveError(d.error ?? `Save failed (HTTP ${res.status}).`);
-        setSaving(false);
-        return;
-      }
+      if (!res.ok) { setSaveError(d.error ?? "Save failed."); setSaving(false); return; }
       setSaveError(null);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "Network error while saving.");
-    } finally {
-      setSaving(false);
-    }
+    } catch { setSaveError("Network error while saving."); }
+    finally { setSaving(false); }
   };
 
   const testKey = async () => {
     setTesting(true);
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     const res = await fetch(`${EDGE_URL}/admin-api/test-key`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
-    const d = await res.json();
-    setKeyTest(d);
+    setKeyTest(await res.json());
     setTesting(false);
   };
 
   const testGroqKey = async () => {
     setTestingGroq(true);
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     const res = await fetch(`${EDGE_URL}/admin-api/test-groq-key`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
-    const d = await res.json();
-    setGroqTest(d);
+    setGroqTest(await res.json());
     setTestingGroq(false);
   };
 
@@ -271,7 +580,6 @@ function SettingsTab() {
 
   return (
     <div className="max-w-3xl space-y-6">
-      {/* Appearance */}
       <Section title="App Appearance" icon={Sparkles}>
         <Field label="App Name">
           <input value={form.app_name} onChange={(e) => set("app_name", e.target.value)} className={inputCls} />
@@ -286,7 +594,6 @@ function SettingsTab() {
         </Field>
       </Section>
 
-      {/* AI Provider */}
       <Section title="AI Provider" icon={KeyRound}>
         <Field label="Provider">
           <select value={form.provider} onChange={(e) => {
@@ -327,21 +634,10 @@ function SettingsTab() {
           )}
         </div>
         <p className="text-xs text-slate-500">
-          The Gemini API key is stored as a server secret, never in the frontend. Add it via the Supabase Edge Function secret <code className="bg-slate-800 px-1 rounded">GEMINI_API_KEY</code>.
+          The Gemini API key is stored as a server secret, never in the frontend.
         </p>
-        {form.provider === "huggingface" && (
-          <p className="text-xs text-amber-400/80 bg-amber-950/30 border border-amber-800/40 rounded-lg px-3 py-2">
-            Hugging Face Inference Providers-এ ফ্রি অ্যাকাউন্টে মাসে মাত্র $0.10 ক্রেডিট থাকে। ক্রেডিট শেষ হলে ব্যবহারকারীদের কাছে একটি বাংলা বার্তা দেখানো হবে। সমর্থিত মডেল: <code className="bg-slate-800 px-1 rounded">meta-llama/Llama-3.3-70B-Instruct</code>, <code className="bg-slate-800 px-1 rounded">meta-llama/Llama-3.1-8B-Instruct</code>। HF টোকেন <code className="bg-slate-800 px-1 rounded">HF_TOKEN</code> সিক্রেট হিসেবে সার্ভারে সংরক্ষিত।
-          </p>
-        )}
-        {form.provider === "groq" && (
-          <p className="text-xs text-emerald-400/80 bg-emerald-950/30 border border-emerald-800/40 rounded-lg px-3 py-2">
-            Groq একটি ফ্রি AI প্রোভাইডার — কোনো ক্রেডিট বা পেমেন্ট লাগে না। ফ্রি টিয়ারে রেট লিমিট আছে (প্রতিদিন/প্রতি মিনিট টোকেন সীমা)। সমর্থিত মডেল: <code className="bg-slate-800 px-1 rounded">openai/gpt-oss-120b</code> (কারেন্ট), <code className="bg-slate-800 px-1 rounded">openai/gpt-oss-20b</code>, <code className="bg-slate-800 px-1 rounded">qwen/qwen3.8-27b</code>। Groq কী <code className="bg-slate-800 px-1 rounded">GROQ_API_KEY</code> সিক্রেট হিসেবে সার্ভারে সংরক্ষিত। Groq প্রাইমারি হলে Gemini এবং OpenRouter স্বয়ংক্রিয়ভাবে ফলব্যাক হিসেবে কাজ করে।
-          </p>
-        )}
       </Section>
 
-      {/* Fallback Provider */}
       <Section title="Fallback Provider" icon={ShieldCheck}>
         <Toggle label="Enable fallback when primary fails" value={form.fallback_enabled} onChange={(v) => set("fallback_enabled", v)} />
         <Field label="Fallback Provider">
@@ -363,51 +659,21 @@ function SettingsTab() {
             </span>
           )}
         </div>
-        <p className="text-xs text-slate-500">
-          Fallback requires a valid <code className="bg-slate-800 px-1 rounded">GROQ_API_KEY</code> secret. When the primary provider returns a rate-limit, quota, or temporary-outage error, the assistant retries once on Groq. Fallback is still subject to Groq's quotas and terms — it is not unlimited free AI.
-        </p>
       </Section>
 
-      {/* Cybersecurity */}
       <Section title="Cybersecurity" icon={ShieldCheck}>
         <Toggle label="Cybersecurity instruction set" value={form.cybersec_enabled} onChange={(v) => set("cybersec_enabled", v)} />
-        <p className="text-xs text-slate-500 -mt-2">
-          Adds structured cybersecurity teaching, code review, and authorized-testing guidance to the system prompt. Applies to both Gemini and Groq.
-        </p>
-        <Toggle label="Require declared authorization scope for active testing" value={form.cybersec_authorization_required} onChange={(v) => set("cybersec_authorization_required", v)} />
-        <p className="text-xs text-slate-500 -mt-2">
-          When on, Rayyan asks the user to declare a testing scope (own app, CTF, local lab) before helping with active testing against a live target. Does not block educational or defensive questions.
-        </p>
+        <Toggle label="Require declared authorization scope" value={form.cybersec_authorization_required} onChange={(v) => set("cybersec_authorization_required", v)} />
       </Section>
 
-      {/* Assistant Tools */}
       <Section title="Assistant Tools" icon={Sparkles}>
-        <Toggle label="Web research (fetch public URLs)" value={form.tool_web_search_enabled} onChange={(v) => set("tool_web_search_enabled", v)} />
-        <p className="text-xs text-slate-500 -mt-2">
-          Lets the AI read a public web page to answer research questions. SSRF-guarded: private/local addresses and non-text content are blocked.
-        </p>
-        <Toggle label="Persistent memory (save user facts)" value={form.tool_memory_enabled} onChange={(v) => set("tool_memory_enabled", v)} />
-        <p className="text-xs text-slate-500 -mt-2">
-          Lets the AI save facts about the user to memory. Existing memory entries are preserved.
-        </p>
+        <Toggle label="Web research" value={form.tool_web_search_enabled} onChange={(v) => set("tool_web_search_enabled", v)} />
+        <Toggle label="Persistent memory" value={form.tool_memory_enabled} onChange={(v) => set("tool_memory_enabled", v)} />
         <Toggle label="Code security review" value={form.tool_code_review_enabled} onChange={(v) => set("tool_code_review_enabled", v)} />
-        <p className="text-xs text-slate-500 -mt-2">
-          Lets the AI produce structured security findings (severity, evidence, impact, remediation, verification) for user-submitted code. Code is reviewed, never executed.
-        </p>
-        <Toggle label="Knowledge library (save user notes/docs)" value={form.tool_knowledge_enabled} onChange={(v) => set("tool_knowledge_enabled", v)} />
-        <p className="text-xs text-slate-500 -mt-2">
-          Lets the AI save user-supplied cybersecurity notes and documentation to a per-user knowledge library, then retrieve relevant entries for future questions.
-        </p>
-        <Toggle label="Dependency vulnerability check (OSV.dev)" value={form.tool_deps_check_enabled} onChange={(v) => set("tool_deps_check_enabled", v)} />
-        <p className="text-xs text-slate-500 -mt-2">
-          Lets the AI check a package list against the free OSV.dev advisory database. No API key, no paid service.
-        </p>
-        <p className="text-xs text-slate-500">
-          No code execution is enabled. The AI reviews code and checks dependencies but does not run them.
-        </p>
+        <Toggle label="Knowledge library" value={form.tool_knowledge_enabled} onChange={(v) => set("tool_knowledge_enabled", v)} />
+        <Toggle label="Dependency vulnerability check" value={form.tool_deps_check_enabled} onChange={(v) => set("tool_deps_check_enabled", v)} />
       </Section>
 
-      {/* Feature toggles */}
       <Section title="Features" icon={CheckCircle2}>
         <Toggle label="Chat" value={form.chat_enabled} onChange={(v) => set("chat_enabled", v)} />
         <Toggle label="Voice" value={form.voice_enabled} onChange={(v) => set("voice_enabled", v)} />
@@ -423,9 +689,7 @@ function SettingsTab() {
         {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
         {saved ? "Saved!" : "Save Settings"}
       </button>
-      {saveError && (
-        <p className="text-sm text-rose-400 mt-2">{saveError}</p>
-      )}
+      {saveError && <p className="text-sm text-rose-400 mt-2">{saveError}</p>}
     </div>
   );
 }
@@ -434,13 +698,16 @@ function SettingsTab() {
 function ProjectsTab() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     const res = await fetch(`${EDGE_URL}/admin-api/projects`, {
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
     const d = await res.json();
+    if (!res.ok) { setError(d.error ?? "Failed to load"); }
     setProjects(d.projects ?? []);
     setLoading(false);
   }, []);
@@ -448,21 +715,23 @@ function ProjectsTab() {
   useEffect(() => { load(); }, [load]);
 
   const del = async (id: string) => {
-    if (!confirm("Permanently delete this project and all its files?")) return;
-    const { data: sess } = await supabase.auth.getSession();
-    await fetch(`${EDGE_URL}/admin-api/projects/${id}`, {
+    const token = await getAuthToken();
+    const res = await fetch(`${EDGE_URL}/admin-api/projects/${id}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
+    if (!res.ok) { setError("Delete failed"); }
+    setConfirmId(null);
     load();
   };
 
   if (loading) return <Spinner />;
+  if (error) return <ErrorBox message={error} />;
 
   return (
     <div className="max-w-4xl">
       {projects.length === 0 ? (
-        <p className="text-slate-500">No projects yet.</p>
+        <EmptyState text="No projects yet." />
       ) : (
         <div className="space-y-3">
           {projects.map((p) => (
@@ -475,12 +744,22 @@ function ProjectsTab() {
                   {new Date(p.created_at).toLocaleString()} · {p.status}
                 </div>
               </div>
-              <button onClick={() => del(p.id)} className="text-slate-500 hover:text-rose-400 p-2">
+              <button
+                onClick={() => setConfirmId(p.id)}
+                className="text-slate-500 hover:text-rose-400 p-2"
+              >
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>
           ))}
         </div>
+      )}
+      {confirmId && (
+        <ConfirmDialog
+          text="Permanently delete this project and all its files? This cannot be undone."
+          onConfirm={() => del(confirmId)}
+          onCancel={() => setConfirmId(null)}
+        />
       )}
     </div>
   );
@@ -490,11 +769,13 @@ function ProjectsTab() {
 function MemoryTab() {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
 
   const load = useCallback(async () => {
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     const res = await fetch(`${EDGE_URL}/admin-api/memory`, {
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
     const d = await res.json();
     setEntries(d.entries ?? []);
@@ -504,22 +785,22 @@ function MemoryTab() {
   useEffect(() => { load(); }, [load]);
 
   const del = async (id: string) => {
-    if (!confirm("Delete this memory entry?")) return;
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     await fetch(`${EDGE_URL}/admin-api/memory/${id}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
+    setConfirmId(null);
     load();
   };
 
   const clearAll = async () => {
-    if (!confirm("Delete ALL memory entries? This cannot be undone.")) return;
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     await fetch(`${EDGE_URL}/admin-api/memory/clear-all`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
+    setConfirmClearAll(false);
     load();
   };
 
@@ -530,24 +811,30 @@ function MemoryTab() {
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-slate-400">{entries.length} memory entries</p>
         {entries.length > 0 && (
-          <button onClick={clearAll} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-sm hover:bg-rose-950/60">
+          <button onClick={() => setConfirmClearAll(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-sm hover:bg-rose-950/60">
             <Trash2 className="w-4 h-4" /> Clear All
           </button>
         )}
       </div>
       {entries.length === 0 ? (
-        <p className="text-slate-500">No memory entries.</p>
+        <EmptyState text="No memory entries." />
       ) : (
         <div className="space-y-2">
           {entries.map((m) => (
             <div key={m.id} className="bg-slate-900 rounded-lg border border-slate-800 p-3 flex items-start gap-3">
               <div className="flex-1 text-sm">{m.content}</div>
-              <button onClick={() => del(m.id)} className="text-slate-500 hover:text-rose-400">
+              <button onClick={() => setConfirmId(m.id)} className="text-slate-500 hover:text-rose-400">
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>
           ))}
         </div>
+      )}
+      {confirmId && (
+        <ConfirmDialog text="Delete this memory entry?" onConfirm={() => del(confirmId)} onCancel={() => setConfirmId(null)} />
+      )}
+      {confirmClearAll && (
+        <ConfirmDialog text="Delete ALL memory entries? This cannot be undone." onConfirm={clearAll} onCancel={() => setConfirmClearAll(false)} />
       )}
     </div>
   );
@@ -557,11 +844,13 @@ function MemoryTab() {
 function KnowledgeTab() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
 
   const load = useCallback(async () => {
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     const res = await fetch(`${EDGE_URL}/admin-api/knowledge`, {
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
     const d = await res.json();
     setEntries(d.entries ?? []);
@@ -571,22 +860,22 @@ function KnowledgeTab() {
   useEffect(() => { load(); }, [load]);
 
   const del = async (id: string) => {
-    if (!confirm("Delete this knowledge entry?")) return;
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     await fetch(`${EDGE_URL}/admin-api/knowledge/${id}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
+    setConfirmId(null);
     load();
   };
 
   const clearAll = async () => {
-    if (!confirm("Delete ALL knowledge entries? This cannot be undone.")) return;
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     await fetch(`${EDGE_URL}/admin-api/knowledge/clear-all`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
+    setConfirmClearAll(false);
     load();
   };
 
@@ -597,13 +886,13 @@ function KnowledgeTab() {
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-slate-400">{entries.length} knowledge entries</p>
         {entries.length > 0 && (
-          <button onClick={clearAll} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-sm hover:bg-rose-950/60">
+          <button onClick={() => setConfirmClearAll(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-300 text-sm hover:bg-rose-950/60">
             <Trash2 className="w-4 h-4" /> Clear All
           </button>
         )}
       </div>
       {entries.length === 0 ? (
-        <p className="text-slate-500">No knowledge entries yet. Users can ask Rayyan to save notes and documentation during chat.</p>
+        <EmptyState text="No knowledge entries yet." />
       ) : (
         <div className="space-y-2">
           {entries.map((k) => (
@@ -616,12 +905,18 @@ function KnowledgeTab() {
                 </div>
                 <div className="text-sm text-slate-300 mt-1 line-clamp-3">{k.content}</div>
               </div>
-              <button onClick={() => del(k.id)} className="text-slate-500 hover:text-rose-400 shrink-0">
+              <button onClick={() => setConfirmId(k.id)} className="text-slate-500 hover:text-rose-400 shrink-0">
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>
           ))}
         </div>
+      )}
+      {confirmId && (
+        <ConfirmDialog text="Delete this knowledge entry?" onConfirm={() => del(confirmId)} onCancel={() => setConfirmId(null)} />
+      )}
+      {confirmClearAll && (
+        <ConfirmDialog text="Delete ALL knowledge entries? This cannot be undone." onConfirm={clearAll} onCancel={() => setConfirmClearAll(false)} />
       )}
     </div>
   );
@@ -637,9 +932,9 @@ function UsageTab() {
 
   const load = useCallback(async (p: number) => {
     setLoading(true);
-    const { data: sess } = await supabase.auth.getSession();
+    const token = await getAuthToken();
     const res = await fetch(`${EDGE_URL}/admin-api/usage?page=${p}`, {
-      headers: { Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
     const d = await res.json();
     setLogs(d.logs ?? []);
@@ -657,7 +952,7 @@ function UsageTab() {
     <div className="max-w-4xl">
       <p className="text-sm text-slate-400 mb-4">{total} total API calls</p>
       {logs.length === 0 ? (
-        <p className="text-slate-500">No API calls logged yet.</p>
+        <EmptyState text="No API calls logged yet." />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -703,11 +998,81 @@ function UsageTab() {
   );
 }
 
-// ---------- Helpers ----------
+// ---------- Shared UI ----------
 const inputCls = "w-full bg-slate-800 text-white rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-600";
 
 function Spinner() {
   return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-slate-500" /></div>;
+}
+
+function ErrorBox({ message }: { message: string }) {
+  return (
+    <div className="bg-rose-950/50 border border-rose-800 text-rose-200 rounded-xl px-4 py-3 text-sm">
+      {message}
+    </div>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return <p className="text-slate-500 text-sm py-8 text-center">{text}</p>;
+}
+
+function ConfirmDialog({
+  text, onConfirm, onCancel, loading,
+}: {
+  text: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  loading?: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <div className="bg-slate-900 rounded-2xl border border-slate-700 p-6 max-w-md w-full">
+        <p className="text-sm text-slate-200 mb-5">{text}</p>
+        <div className="flex gap-3 justify-end">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 rounded-lg bg-slate-800 text-sm text-slate-300 hover:bg-slate-700"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm hover:bg-rose-500 disabled:opacity-40"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Confirm"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IconBtn({
+  icon: Icon, label, onClick, color,
+}: {
+  icon: any;
+  label: string;
+  onClick: () => void;
+  color: "cyan" | "amber" | "rose" | "emerald" | "slate";
+}) {
+  const colorMap = {
+    cyan: "text-cyan-400 hover:bg-cyan-950/40",
+    amber: "text-amber-400 hover:bg-amber-950/40",
+    rose: "text-rose-400 hover:bg-rose-950/40",
+    emerald: "text-emerald-400 hover:bg-emerald-950/40",
+    slate: "text-slate-400 hover:bg-slate-800",
+  };
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      className={`p-1.5 rounded-lg transition ${colorMap[color]}`}
+    >
+      <Icon className="w-4 h-4" />
+    </button>
+  );
 }
 
 function Section({ title, icon: Icon, children }: { title: string; icon: any; children: React.ReactNode }) {

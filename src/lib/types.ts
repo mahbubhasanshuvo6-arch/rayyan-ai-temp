@@ -116,3 +116,27 @@ export interface AdminStats {
   errors_today: number;
   recent_errors: Array<{ model: string; error: string; created_at: string }>;
 }
+
+export type AdminRole = "super_admin" | "admin" | "support";
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  created_at: string;
+  last_sign_in_at: string | null;
+  banned: boolean;
+  is_admin: boolean;
+  admin_role: AdminRole | null;
+  admin_suspended: boolean;
+}
+
+export interface AuditEvent {
+  id: string;
+  admin_id: string | null;
+  action: string;
+  detail: Record<string, unknown> | null;
+  target: string | null;
+  target_type: string | null;
+  outcome: "success" | "failed" | "denied";
+  created_at: string;
+}
