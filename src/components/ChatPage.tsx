@@ -187,6 +187,24 @@ export default function ChatPage() {
       content: m.content,
     }));
 
+    // Fetch user's persistent memory to inject into the AI context.
+    // Scoped by owner_label via RLS — only this user's entries are returned.
+    // Failures are non-fatal: chat proceeds without memory.
+    let memoryStrings: string[] = [];
+    try {
+      const { data: memData, error: memErr } = await supabase
+        .from("memory_entries")
+        .select("content")
+        .or(`owner_label.eq.${ownerLabel}`)
+        .order("created_at", { ascending: false })
+        .limit(8);
+      if (!memErr && memData && memData.length > 0) {
+        memoryStrings = memData.map((m: { content: string }) => m.content).filter(Boolean);
+      }
+    } catch {
+      // Memory retrieval failed — proceed without memory (safe fallback).
+    }
+
     try {
       const res = await fetch(`${EDGE_URL}/gemini-chat`, {
         method: "POST",
@@ -199,6 +217,7 @@ export default function ChatPage() {
           message: userText,
           history,
           ownerLabel,
+          memory: memoryStrings.length > 0 ? memoryStrings : undefined,
           authorization:
             scope.scope || scope.target || scope.relationship
               ? scope
