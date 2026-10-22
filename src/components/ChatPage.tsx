@@ -841,9 +841,25 @@ export default function ChatPage() {
               onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
             />
 
+            {/* Voice language toggle — kept outside the input pill */}
+            {settings.voice_enabled && (
+              <div className="flex justify-end mb-1.5">
+                <button
+                  onClick={() => {
+                    const next = voiceSettings.sttLang === "bn-BD" ? "en-US" : "bn-BD";
+                    updateVoiceSettings({ sttLang: next, ttsLang: next });
+                  }}
+                  className="h-7 px-2.5 rounded-full text-[11px] font-bold text-slate-500 hover:text-white hover:bg-slate-800 transition"
+                  title={`Voice language: ${voiceSettings.sttLang === "bn-BD" ? "Bengali" : "English"}`}
+                  aria-label={`Voice language: ${voiceSettings.sttLang === "bn-BD" ? "Bengali" : "English"}. Click to switch.`}
+                >
+                  {voiceSettings.sttLang === "bn-BD" ? "বাং" : "EN"}
+                </button>
+              </div>
+            )}
+
             {/* Pill-shaped input container */}
-            <div className="relative">
-              <div className="flex items-end gap-2 bg-slate-800 border border-slate-700 rounded-[28px] px-2.5 sm:px-3 py-2 shadow-lg max-h-40 overflow-y-auto">
+            <div className="flex items-end gap-2 bg-slate-800 border border-slate-700 rounded-[28px] px-2.5 sm:px-3 py-2 shadow-lg">
                 {/* Left: Plus button with dropdown menu */}
                 <div className="relative shrink-0">
                   <button
@@ -862,7 +878,7 @@ export default function ChatPage() {
                   {showPlusMenu && (
                     <>
                       <div className="fixed inset-0 z-40" onClick={() => setShowPlusMenu(false)} />
-                      <div className="absolute bottom-12 left-0 w-60 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50">
+                      <div className="fixed bottom-24 left-3 right-3 sm:absolute sm:bottom-14 sm:left-0 sm:right-auto sm:w-60 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50">
                         <button
                           onClick={() => { fileInputRef.current?.click(); }}
                           className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
@@ -915,28 +931,15 @@ export default function ChatPage() {
                       sendMessage();
                     }
                   }}
-                  placeholder={listening ? (conversationMode ? "শুনছি... কথা বলুন" : "শুনছি...") : `Message ${settings.app_name}`}
+                  placeholder="Message Rayyan AI"
                   rows={1}
                   className="flex-1 min-w-0 bg-transparent text-slate-100 placeholder:text-slate-500 px-1 sm:px-2 py-2 text-sm sm:text-[15px] resize-none outline-none max-h-32 leading-relaxed"
                   style={{ minHeight: "24px" }}
                   aria-label="Message input"
                 />
 
-                {/* Right: Lang + Mic + Send/Voice buttons */}
+                {/* Right: Mic + Send/Voice buttons */}
                 <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                  {settings.voice_enabled && (
-                    <button
-                      onClick={() => {
-                        const next = voiceSettings.sttLang === "bn-BD" ? "en-US" : "bn-BD";
-                        updateVoiceSettings({ sttLang: next, ttsLang: next });
-                      }}
-                      className="h-9 sm:h-10 px-2 rounded-full text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-700 transition shrink-0"
-                      title={`ভাষা: ${voiceSettings.sttLang === "bn-BD" ? "বাংলা" : "English"}`}
-                      aria-label={`Voice language: ${voiceSettings.sttLang === "bn-BD" ? "Bengali" : "English"}. Click to switch.`}
-                    >
-                      {voiceSettings.sttLang === "bn-BD" ? "বাং" : "EN"}
-                    </button>
-                  )}
                   {settings.voice_enabled && (
                     <button
                       onClick={toggleListening}
@@ -987,7 +990,6 @@ export default function ChatPage() {
                   )}
                 </div>
               </div>
-            </div>
 
             <p className="text-center text-[11px] text-slate-600 mt-2 hidden sm:block">
               Rayyan AI can make mistakes. Verify important information.
