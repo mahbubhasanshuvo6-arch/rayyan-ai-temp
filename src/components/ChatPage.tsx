@@ -18,7 +18,7 @@ import { loadWakeWordSettings, detectWakeWord, type WakeWordSettings } from "@/l
 import { useAuth } from "@/lib/useAuth";
 import {
   type Attachment, createAttachment, validateFile, formatFileSize, createThumbnail,
-  isPdfType, extractFileText,
+  isPdfType, isImageType, isTextType, extractFileText,
 } from "@/lib/attachments";
 import type { ChatMessageAttachment } from "@/lib/types";
 
@@ -88,7 +88,6 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [attachmentLoading, setAttachmentLoading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
@@ -178,27 +177,42 @@ export default function ChatPage() {
     setShowPlusMenu(false);
   };
 
-  const addDocumentFile = async (file: File) => {
-    if (!isPdfType(file.type, file.name) && !file.type.startsWith("text/")) {
-      setAttachmentError("শুধু PDF এবং TXT ফাইল সমর্থিত।");
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setAttachmentError("ফাইলের সাইজ 10 MB এর বেশি হতে পারবে না।");
-      return;
-    }
-    setDocProcessing(true);
+  const addDocumentFiles = async (files: FileList | File[]) => {
+    const fileArr = Array.from(files);
+    if (fileArr.length === 0) return;
     setAttachmentError(null);
     setShowPlusMenu(false);
-    try {
+    const imageFiles: File[] = [];
+    const docFiles: File[] = [];
+    for (const file of fileArr) {
+      if (isImageType(file.type, file.name)) {
+        imageFiles.push(file);
+      } else if (isPdfType(file.type, file.name) || file.type.startsWith("text/") || isTextType(file.type, file.name)) {
+        docFiles.push(file);
+      } else {
+        setAttachmentError(`"${file.name}" — এই ধরনের ফাইল সমর্থিত নয়।`);
+      }
+    }
+    if (imageFiles.length > 0) {
+      addFiles(imageFiles);
+    }
+    if (docFiles.length > 0) {
+      setDocProcessing(true);
       const authToken = session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY;
-      const extractedText = await extractFileText(file, authToken, session ? undefined : ownerLabel);
-      const att = await createAttachment(file);
-      att.extractedText = extractedText;
-      setAttachments((prev) => [...prev, att]);
-    } catch (e) {
-      setAttachmentError(e instanceof Error ? e.message : "ফাইল প্রসেস করতে সমস্যা।");
-    } finally {
+      for (const file of docFiles) {
+        if (file.size > 10 * 1024 * 1024) {
+          setAttachmentError(`"${file.name}" — ফাইলের সাইজ 10 MB এর বেশি হতে পারবে না।`);
+          continue;
+        }
+        try {
+          const extractedText = await extractFileText(file, authToken, session ? undefined : ownerLabel);
+          const att = await createAttachment(file);
+          att.extractedText = extractedText;
+          setAttachments((prev) => [...prev, att]);
+        } catch (e) {
+          setAttachmentError(e instanceof Error ? e.message : `"${file.name}" প্রসেস করতে সমস্যা।`);
+        }
+      }
       setDocProcessing(false);
     }
   };
@@ -918,14 +932,6 @@ export default function ChatPage() {
 
             {/* Hidden file inputs */}
             <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*,text/*,.txt,.md,.csv,.json,.xml,.html,.js,.ts,.py,.java"
-              multiple
-              className="hidden"
-              onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
-            />
-            <input
               ref={cameraInputRef}
               type="file"
               accept="image/*"
@@ -944,29 +950,20 @@ export default function ChatPage() {
             <input
               ref={documentInputRef}
               type="file"
-              accept=".pdf,.txt,application/pdf,text/plain"
+              accept="image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.js,.ts,.py,.java,application/pdf,text/plain"
+              multiple
               className="hidden"
-              onChange={(e) => { if (e.target.files?.[0]) addDocumentFile(e.target.files[0]); e.target.value = ""; }}
+              onChange={(e) => { if (e.target.files) addDocumentFiles(e.target.files); e.target.value = ""; }}
             />
 
             {/* Pill-shaped input container */}
             <div className="flex items-end gap-2 bg-slate-800 border border-slate-700 rounded-[28px] px-2.5 sm:px-3 py-2 shadow-lg">
-                {/* Left: Document (paperclip) button + Plus menu */}
-                <div className="relative shrink-0 flex items-center">
-                  <button
-                    onClick={() => { documentInputRef.current?.click(); setAttachmentError(null); }}
-                    disabled={docProcessing}
-                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition shrink-0 text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-40"
-                    title="PDF বা TXT ফাইল যুক্ত করুন"
-                    aria-label="Attach document"
-                  >
-                    {docProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileText className="w-5 h-5" />}
-                  </button>
-                  <div className="relative shrink-0">
+                {/* Left: Plus button with dropdown menu */}
+                <div className="relative shrink-0">
                   <button
                     onClick={() => { setShowPlusMenu((v) => !v); setAttachmentError(null); }}
                     className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition shrink-0 ${
-                      showPlusMenu || attachments.length > 0
+                      showPlusMenu || attachments.length > 0 || docProcessing
                         ? accent.bg + " text-white"
                         : "bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white"
                     }`}
@@ -974,67 +971,36 @@ export default function ChatPage() {
                     aria-label="Attach files"
                     aria-expanded={showPlusMenu}
                   >
-                    <Plus className={`w-5 h-5 transition-transform ${showPlusMenu ? "rotate-45" : ""}`} />
+                    {docProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className={`w-5 h-5 transition-transform ${showPlusMenu ? "rotate-45" : ""}`} />}
                   </button>
                   {showPlusMenu && (
                     <>
                       <div className="fixed inset-0 z-40" onClick={() => setShowPlusMenu(false)} />
                       <div className="fixed bottom-24 left-3 right-3 sm:absolute sm:bottom-14 sm:left-0 sm:right-auto sm:w-60 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50">
                         <button
-                          onClick={() => { galleryInputRef.current?.click(); }}
-                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
-                          aria-label="Pick images from gallery"
-                        >
-                          <ImageIcon className="w-4 h-4 text-slate-400" /> গ্যালারি থেকে ছবি
-                        </button>
-                        <button
-                          onClick={() => { documentInputRef.current?.click(); }}
-                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
-                          aria-label="Upload document"
-                        >
-                          <FileText className="w-4 h-4 text-slate-400" /> PDF / টেক্সট ফাইল
-                        </button>
-                        <button
-                          onClick={() => { fileInputRef.current?.click(); }}
-                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
-                          aria-label="Upload file"
-                        >
-                          <FileText className="w-4 h-4 text-slate-400" /> অন্যান্য ফাইল
-                        </button>
-                        <button
                           onClick={() => { cameraInputRef.current?.click(); }}
                           className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
                           aria-label="Take a photo"
                         >
-                          <Camera className="w-4 h-4 text-slate-400" /> ক্যামেরা দিয়ে ছবি
-                        </button>
-                        <div className="border-t border-slate-700 my-1" />
-                        <button
-                          onClick={() => { navigate("documents"); setShowPlusMenu(false); }}
-                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
-                          aria-label="Upload document"
-                        >
-                          <BookOpen className="w-4 h-4 text-slate-400" /> ডকুমেন্ট পেজ
+                          <Camera className="w-4 h-4 text-slate-400" /> Camera
                         </button>
                         <button
-                          onClick={() => { navigate("builder"); setShowPlusMenu(false); }}
+                          onClick={() => { galleryInputRef.current?.click(); }}
                           className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
-                          aria-label="App builder"
+                          aria-label="Pick images from gallery"
                         >
-                          <Sparkles className="w-4 h-4 text-slate-400" /> অ্যাপ বিল্ডার
+                          <ImageIcon className="w-4 h-4 text-slate-400" /> Photo
                         </button>
-                        {settings.cybersec_enabled && settings.cybersec_authorization_required && (
-                          <button
-                            onClick={() => { setShowScope(true); setShowPlusMenu(false); }}
-                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
-                          >
-                            <ShieldCheck className="w-4 h-4 text-slate-400" /> টেস্টিং স্কোপ
-                          </button>
-                        )}
+                        <button
+                          onClick={() => { documentInputRef.current?.click(); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                          aria-label="Upload files"
+                        >
+                          <FileText className="w-4 h-4 text-slate-400" /> Files
+                        </button>
                       </div>
                     </>
                   )}
-                  </div>
                 </div>
 
                 {/* Center: Textarea */}

@@ -38,7 +38,7 @@ export function isImageType(type: string, name: string): boolean {
   return ["png", "jpg", "jpeg", "webp", "gif", "heic", "heif"].includes(ext);
 }
 
-function isTextType(type: string, name: string): boolean {
+export function isTextType(type: string, name: string): boolean {
   if (TEXT_TYPES.includes(type)) return true;
   const ext = "." + (name.toLowerCase().split(".").pop() ?? "");
   return TEXT_TYPES.includes(ext);
