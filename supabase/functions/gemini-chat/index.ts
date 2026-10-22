@@ -253,6 +253,7 @@ interface ProviderResult {
 }
 
 const GEMINI_TIMEOUT_MS = 25000;
+const GEMINI_IMAGE_TIMEOUT_MS = 60000; // images need more time to upload/process
 const GROQ_TIMEOUT_MS = 20000;
 const OPENROUTER_TIMEOUT_MS = 30000;
 const HF_TIMEOUT_MS = 30000;
@@ -268,8 +269,13 @@ async function callGemini(
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
   )}:generateContent?key=${GEMINI_KEY}`;
+  // Detect if any part contains inline image data — use a longer timeout.
+  const hasImages = contents.some((c) =>
+    c.parts.some((p) => "inlineData" in p)
+  );
+  const timeoutMs = hasImages ? GEMINI_IMAGE_TIMEOUT_MS : GEMINI_TIMEOUT_MS;
   const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), GEMINI_TIMEOUT_MS);
+  const to = setTimeout(() => ctrl.abort(), timeoutMs);
   // Combine external signal (if any) with our timeout.
   const onExternalAbort = () => ctrl.abort();
   if (signal) signal.addEventListener("abort", onExternalAbort);
@@ -304,7 +310,7 @@ async function callGemini(
     return { text, pt, ct, total, provider: "gemini", model, finishReason };
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
-      const err = new Error("Gemini request timed out.") as Error & { status: number };
+      const err = new Error(`Gemini request timed out (${timeoutMs / 1000}s${hasImages ? " with images" : ""}).`) as Error & { status: number };
       err.status = 504;
       throw err;
     }
