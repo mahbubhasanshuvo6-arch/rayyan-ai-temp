@@ -10,11 +10,11 @@ import {
   ExternalLink, ArrowUp, AudioLines, Camera, Image as ImageIcon, FileText, XCircle,
 } from "lucide-react";
 import {
-  loadVoiceSettings, saveVoiceSettings, createRecognizer, createSpeaker,
-  isSTTSupported, isTTSSupported, pickBengaliVoice,
+  loadVoiceSettings, createRecognizer, createSpeaker,
+  isSTTSupported, isTTSSupported,
   type VoiceSettings, type STTController,
 } from "@/lib/voice";
-import { loadWakeWordSettings, saveWakeWordSettings, detectWakeWord, WAKE_WORD_STATUS_NOTE, type WakeWordSettings } from "@/lib/wakeWord";
+import { loadWakeWordSettings, detectWakeWord, type WakeWordSettings } from "@/lib/wakeWord";
 import { useAuth } from "@/lib/useAuth";
 import {
   type Attachment, createAttachment, validateFile, formatFileSize,
@@ -93,7 +93,7 @@ export default function ChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const sttRef = useRef<STTController | null>(null);
   const ttsRef = useRef<ReturnType<typeof createSpeaker> | null>(null);
-  const convRestartRef = useRef(false);
+  const conversationModeRef = useRef(false);
 
   // Load threads.
   const loadThreads = useCallback(async () => {
@@ -346,7 +346,7 @@ export default function ChatPage() {
         content: reply,
       });
 
-      if (settings.voice_enabled && voiceRepliesOn) {
+      if (settings.voice_enabled && (voiceRepliesOn || conversationModeRef.current)) {
         speak(reply);
       }
     } catch (e) {
@@ -436,7 +436,14 @@ export default function ChatPage() {
     // Poll for end since onend is unreliable on some Android WebViews.
     const synth = window.speechSynthesis;
     const check = setInterval(() => {
-      if (!synth.speaking) { setSpeaking(false); clearInterval(check); }
+      if (!synth.speaking) {
+        setSpeaking(false);
+        clearInterval(check);
+        // Conversation mode: resume listening after the reply finishes speaking.
+        if (conversationModeRef.current) {
+          setTimeout(() => startListening(), 400);
+        }
+      }
     }, 300);
   };
 
@@ -459,37 +466,31 @@ export default function ChatPage() {
         }
         setInterimText("");
         if (wakeWord.enabled && detectWakeWord(text)) {
-          // Wake word detected — strip it and continue with the rest.
           const cleaned = text.replace(/hello rayyan|হ্যালো রায়য়ান|হালো রায়য়ান|hello rayan|hey rayyan|হ্যালো রায়ান/i, "").trim();
           if (cleaned) {
             setInput(cleaned);
-            if (voiceSettings.autoSend || conversationMode) {
+            if (voiceSettings.autoSend || conversationModeRef.current) {
               setTimeout(() => sendMessage(), 100);
             }
           }
           return;
         }
         setInput((prev) => (prev ? prev + " " : "") + text);
-        if (voiceSettings.autoSend || conversationMode) {
+        if (voiceSettings.autoSend || conversationModeRef.current) {
           setTimeout(() => sendMessage(), 100);
         }
       },
-      onError: (msg) => { setError(msg); setListening(false); setConversationMode(false); },
+      onError: (msg) => { setError(msg); setListening(false); setConversationMode(false); conversationModeRef.current = false; },
       onEnd: () => {
         setListening(false);
         setInterimText("");
-        // Conversation mode: auto-restart listening after reply completes.
-        if (convRestartRef.current && !speaking) {
-          convRestartRef.current = false;
-          setTimeout(() => startListening(), 500);
-        }
       },
     });
     if (!stt) return;
     sttRef.current = stt;
     stt.start();
     setListening(true);
-  }, [voiceSettings.sttLang, voiceSettings.autoSend, wakeWord.enabled, conversationMode, speaking]);
+  }, [voiceSettings.sttLang, voiceSettings.autoSend, wakeWord.enabled]);
 
   const stopListening = useCallback(() => {
     sttRef.current?.stop();
@@ -503,31 +504,22 @@ export default function ChatPage() {
     startListening();
   };
 
-  // Conversation mode: hold mic to listen continuously, auto-send, speak reply, then listen again.
   const toggleConversationMode = () => {
     if (conversationMode) {
       setConversationMode(false);
-      convRestartRef.current = false;
+      conversationModeRef.current = false;
       stopListening();
+      stopSpeaking();
       return;
     }
     setConversationMode(true);
-    convRestartRef.current = false;
+    conversationModeRef.current = true;
     startListening();
   };
 
-  // Update voice settings and persist.
-  const updateVoiceSettings = (patch: Partial<VoiceSettings>) => {
-    const next = { ...voiceSettings, ...patch };
-    setVoiceSettings(next);
-    saveVoiceSettings(next);
-  };
 
-  const updateWakeWord = (patch: Partial<WakeWordSettings>) => {
-    const next = { ...wakeWord, ...patch };
-    setWakeWord(next);
-    saveWakeWordSettings(next);
-  };
+
+
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden max-w-[100vw]">
@@ -840,23 +832,6 @@ export default function ChatPage() {
               className="hidden"
               onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
             />
-
-            {/* Voice language toggle — kept outside the input pill */}
-            {settings.voice_enabled && (
-              <div className="flex justify-end mb-1.5">
-                <button
-                  onClick={() => {
-                    const next = voiceSettings.sttLang === "bn-BD" ? "en-US" : "bn-BD";
-                    updateVoiceSettings({ sttLang: next, ttsLang: next });
-                  }}
-                  className="h-7 px-2.5 rounded-full text-[11px] font-bold text-slate-500 hover:text-white hover:bg-slate-800 transition"
-                  title={`Voice language: ${voiceSettings.sttLang === "bn-BD" ? "Bengali" : "English"}`}
-                  aria-label={`Voice language: ${voiceSettings.sttLang === "bn-BD" ? "Bengali" : "English"}. Click to switch.`}
-                >
-                  {voiceSettings.sttLang === "bn-BD" ? "বাং" : "EN"}
-                </button>
-              </div>
-            )}
 
             {/* Pill-shaped input container */}
             <div className="flex items-end gap-2 bg-slate-800 border border-slate-700 rounded-[28px] px-2.5 sm:px-3 py-2 shadow-lg">
