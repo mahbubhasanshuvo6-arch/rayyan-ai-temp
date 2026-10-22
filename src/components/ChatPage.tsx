@@ -779,6 +779,175 @@ export default function ChatPage() {
         </div>
       </aside>
 
+      {/* Learning Panel */}
+      {showLearningPanel && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60" onClick={() => setShowLearningPanel(false)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 bg-slate-900 border-b border-slate-800 px-5 py-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <GraduationCap className="w-5 h-5 text-slate-300" /> Learning Progress
+              </h2>
+              <button onClick={() => setShowLearningPanel(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-6">
+              {learning.loading && (
+                <div className="flex items-center gap-2 text-sm text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading learning data...
+                </div>
+              )}
+              {learning.error && (
+                <div className="text-sm text-rose-300 bg-rose-950/50 border border-rose-800 rounded-lg px-3 py-2">
+                  {learning.error}
+                </div>
+              )}
+
+              {/* Goals section */}
+              <div>
+                <h3 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
+                  <Target className="w-4 h-4 text-slate-400" /> Learning Goals
+                </h3>
+                {learning.goals.length > 0 ? (
+                  <div className="space-y-2 mb-3">
+                    {learning.goals.map((g) => (
+                      <div key={g.id} className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-slate-100 truncate">{g.goal}</p>
+                          <p className="text-[11px] text-slate-500">
+                            {g.category} · {g.skill_level} · <span className={g.status === "active" ? "text-emerald-400" : g.status === "completed" ? "text-blue-400" : "text-amber-400"}>{g.status}</span>
+                          </p>
+                        </div>
+                        <select
+                          value={g.status}
+                          onChange={(e) => learning.updateGoalStatus(g.id, e.target.value)}
+                          className="bg-slate-900 text-xs text-slate-300 rounded px-1.5 py-1 border border-slate-700 outline-none"
+                        >
+                          <option value="active">Active</option>
+                          <option value="completed">Completed</option>
+                          <option value="paused">Paused</option>
+                        </select>
+                        <button onClick={() => learning.deleteGoal(g.id)} className="text-slate-500 hover:text-rose-400 transition shrink-0">
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 mb-3">No goals yet. Add one below to get started.</p>
+                )}
+                <div className="bg-slate-800/50 rounded-lg p-3 space-y-2">
+                  <input
+                    value={newGoalText}
+                    onChange={(e) => setNewGoalText(e.target.value)}
+                    placeholder="e.g. Learn Python from scratch"
+                    className="w-full bg-slate-900 text-slate-100 rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-slate-600"
+                  />
+                  <div className="flex gap-2">
+                    <select value={newGoalCategory} onChange={(e) => setNewGoalCategory(e.target.value)} className="flex-1 bg-slate-900 text-slate-300 rounded-lg px-2 py-1.5 text-xs border border-slate-700 outline-none">
+                      {GOAL_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    </select>
+                    <select value={newGoalLevel} onChange={(e) => setNewGoalLevel(e.target.value)} className="flex-1 bg-slate-900 text-slate-300 rounded-lg px-2 py-1.5 text-xs border border-slate-700 outline-none">
+                      {SKILL_LEVELS.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
+                    </select>
+                    <button
+                      onClick={async () => {
+                        if (!newGoalText.trim()) return;
+                        const ok = await learning.addGoal(newGoalText.trim(), newGoalCategory, newGoalLevel);
+                        if (ok) setNewGoalText("");
+                      }}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-700 text-white text-xs hover:bg-slate-600 transition shrink-0"
+                    >
+                      <PlusIcon className="w-3.5 h-3.5" /> Add
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress section */}
+              {learning.progress.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
+                    <Check className="w-4 h-4 text-emerald-400" /> Completed Lessons ({learning.progress.length})
+                  </h3>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {learning.progress.slice(0, 20).map((p) => (
+                      <div key={p.id} className="flex items-center gap-2 bg-slate-800/50 rounded-lg px-3 py-2">
+                        <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span className="text-sm text-slate-300 truncate flex-1">{p.lesson_title ?? p.lesson_id}</span>
+                        <span className="text-[11px] text-slate-500 shrink-0">{p.lesson_type}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Code snippets section */}
+              <div>
+                <h3 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
+                  <Code className="w-4 h-4 text-slate-400" /> Saved Code Snippets
+                </h3>
+                {learning.snippets.length > 0 && (
+                  <div className="space-y-2 mb-3">
+                    {learning.snippets.map((s) => (
+                      <div key={s.id} className="bg-slate-800 rounded-lg px-3 py-2">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-sm text-slate-100 flex-1 truncate">{s.title}</span>
+                          <span className="text-[10px] text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded">{s.language}</span>
+                          <button onClick={() => learning.deleteSnippet(s.id)} className="text-slate-500 hover:text-rose-400 transition shrink-0">
+                            <TrashIcon className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        {s.description && <p className="text-xs text-slate-400 mb-1">{s.description}</p>}
+                        <pre className="text-xs text-slate-300 bg-slate-900 rounded p-2 overflow-x-auto max-h-32"><code>{s.code}</code></pre>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {showSnippetForm ? (
+                  <div className="bg-slate-800/50 rounded-lg p-3 space-y-2">
+                    <input
+                      value={snippetTitle}
+                      onChange={(e) => setSnippetTitle(e.target.value)}
+                      placeholder="Snippet title"
+                      className="w-full bg-slate-900 text-slate-100 rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-slate-600"
+                    />
+                    <div className="flex gap-2">
+                      <select value={snippetLang} onChange={(e) => setSnippetLang(e.target.value)} className="bg-slate-900 text-slate-300 rounded-lg px-2 py-1.5 text-xs border border-slate-700 outline-none">
+                        {["python", "javascript", "typescript", "java", "c", "cpp", "csharp", "go", "rust", "php", "sql", "bash", "powershell", "html", "css"].map((l) => <option key={l} value={l}>{l}</option>)}
+                      </select>
+                      <button
+                        onClick={async () => {
+                          if (!snippetTitle.trim() || !snippetCode.trim()) return;
+                          const ok = await learning.saveSnippet(snippetTitle.trim(), snippetLang, snippetCode.trim());
+                          if (ok) { setSnippetTitle(""); setSnippetCode(""); setShowSnippetForm(false); }
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-slate-700 text-white text-xs hover:bg-slate-600 transition"
+                      >Save</button>
+                      <button onClick={() => setShowSnippetForm(false)} className="px-3 py-1.5 rounded-lg bg-slate-700 text-slate-300 text-xs hover:bg-slate-600 transition">Cancel</button>
+                    </div>
+                    <textarea
+                      value={snippetCode}
+                      onChange={(e) => setSnippetCode(e.target.value)}
+                      placeholder="Paste your code here..."
+                      rows={5}
+                      className="w-full bg-slate-900 text-slate-100 rounded-lg px-3 py-2 text-xs font-mono outline-none focus:ring-1 focus:ring-slate-600"
+                    />
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowSnippetForm(true)}
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-sm hover:bg-slate-700 transition"
+                  >
+                    <PlusIcon className="w-4 h-4" /> Save a code snippet
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/50 z-30 lg:hidden" onClick={() => setSidebarOpen(false)} />
       )}

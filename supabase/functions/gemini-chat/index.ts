@@ -1320,7 +1320,7 @@ Deno.serve(async (req: Request) => {
       }
 
       // ---- Learning context injection ----
-      // The frontend sends body.learningContext with the user's active goals,
+      // Frontend sends body.learningContext with the user's active goals,
       // skill levels, and recent lesson completions so the AI can tailor
       // explanations to the user's level and reference their progress.
       if (body.learningContext && typeof body.learningContext === "string" && body.learningContext.trim()) {
