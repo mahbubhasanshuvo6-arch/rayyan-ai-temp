@@ -4,10 +4,20 @@ import { navigate } from "@/lib/router";
 import type { UserDocument } from "@/lib/types";
 import {
   FileText, Upload, Trash2, ArrowLeft, Loader2, AlertCircle,
-  CheckCircle2, FileUp, X, Info, LogIn,
+  CheckCircle2, FileUp, X, Info,
 } from "lucide-react";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const SESSION_LABEL_KEY = "rayyan_owner_label";
+
+function getOrCreateOwnerLabel(): string {
+  let label = localStorage.getItem(SESSION_LABEL_KEY);
+  if (!label) {
+    label = `anon-${crypto.randomUUID()}`;
+    localStorage.setItem(SESSION_LABEL_KEY, label);
+  }
+  return label;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -24,68 +34,16 @@ export default function DocumentsPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [authUserId, setAuthUserId] = useState<string | null>(null);
-  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setAuthUserId(data.session?.user?.id ?? null);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
-      setAuthUserId(sess?.user?.id ?? null);
-    });
-    return () => sub.subscription.unsubscribe();
-  }, []);
-
-  const handleAuth = async () => {
-    setAuthError(null);
-    setAuthLoading(true);
-    try {
-      if (authMode === "signin") {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: authEmail,
-          password: authPassword,
-        });
-        if (error) setAuthError(error.message);
-      } else {
-        const { error } = await supabase.auth.signUp({
-          email: authEmail,
-          password: authPassword,
-        });
-        if (error) {
-          setAuthError(error.message);
-        } else {
-          setAuthError(null);
-          setAuthMode("signin");
-          setAuthEmail("");
-          setAuthPassword("");
-          // Auto-sign-in after signup (email confirmation is off)
-          const { error: signInError } = await supabase.auth.signInWithPassword({
-            email: authEmail,
-            password: authPassword,
-          });
-          if (signInError) setAuthError(signInError.message);
-        }
-      }
-    } catch {
-      setAuthError("Authentication failed. Please try again.");
-    }
-    setAuthLoading(false);
-  };
+  const ownerLabel = getOrCreateOwnerLabel();
 
   const load = useCallback(async () => {
-    if (!authUserId) { setLoading(false); return; }
     setLoading(true);
     setError(null);
     try {
       const { data, error: qe } = await supabase
         .from("user_documents")
         .select("id, user_id, owner_label, title, file_name, file_type, file_size, chunk_count, status, error_message, created_at, updated_at")
-        .eq("user_id", authUserId)
+        .eq("owner_label", ownerLabel)
         .order("created_at", { ascending: false });
       if (qe) {
         setError(qe.message);
@@ -96,14 +54,13 @@ export default function DocumentsPage() {
       setError(e instanceof Error ? e.message : "Failed to load documents");
     }
     setLoading(false);
-  }, [authUserId]);
+  }, [ownerLabel]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleFile = async (file: File) => {
     setError(null);
 
-    // Client-side validation
     const ext = file.name.toLowerCase().split(".").pop() ?? "";
     if (ext !== "pdf" && ext !== "txt") {
       setError("Only PDF and TXT files are supported.");
@@ -123,15 +80,8 @@ export default function DocumentsPage() {
 
     try {
       const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-      if (!token) {
-        setError("Please sign in to upload documents.");
-        setUploading(false);
-        setUploadProgress(null);
-        return;
-      }
+      const token = sessionData.session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-      // Convert file to base64 for JSON API
       const arrayBuffer = await file.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
       let binary = "";
@@ -150,10 +100,12 @@ export default function DocumentsPage() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
+          action: "upload",
           file: base64,
           fileName: file.name,
           fileType: file.type,
           title: file.name.replace(/\.[^.]+$/, ""),
+          ownerLabel: sessionData.session ? undefined : ownerLabel,
         }),
       });
 
@@ -162,7 +114,7 @@ export default function DocumentsPage() {
         setError(result.error ?? "Upload failed.");
       } else {
         setUploadProgress(null);
-        load(); // Refresh list
+        load();
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed.");
@@ -172,27 +124,40 @@ export default function DocumentsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    // Delete via direct DB + storage — RLS allows owner to delete
-    // First get storage_path
-    const { data: doc } = await supabase
-      .from("user_documents")
-      .select("storage_path")
-      .eq("id", id)
-      .maybeSingle();
+    setError(null);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-    if (doc?.storage_path) {
-      await supabase.storage.from("user-documents").remove([doc.storage_path]);
+      const res = await fetch(`${EDGE_URL}/process-document`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          action: "delete",
+          documentId: id,
+          ownerLabel: sessionData.session ? undefined : ownerLabel,
+        }),
+      });
+
+      if (!res.ok) {
+        const result = await res.json();
+        setError(result.error ?? "Failed to delete document.");
+      } else {
+        setConfirmDelete(null);
+        load();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete document.");
     }
-    // Delete the document record — cascades to knowledge_entries chunks
-    await supabase.from("user_documents").delete().eq("id", id);
-    setConfirmDelete(null);
-    load();
   };
 
   const onFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) handleFile(file);
-    e.target.value = ""; // Reset so same file can be selected again
+    e.target.value = "";
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -222,54 +187,6 @@ export default function DocumentsPage() {
       </header>
 
       <div className="max-w-4xl mx-auto p-4 lg:p-6 space-y-6">
-        {/* Auth gate */}
-        {!authUserId ? (
-          <div className="max-w-sm mx-auto py-12">
-            <div className="w-16 h-16 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto mb-4">
-              <LogIn className="w-8 h-8 text-slate-400" />
-            </div>
-            <p className="text-slate-300 font-medium mb-1 text-center">Sign in required</p>
-            <p className="text-sm text-slate-500 mb-6 text-center">
-              Sign in to upload and manage your documents.
-            </p>
-            {authError && (
-              <div className="bg-rose-950/50 border border-rose-800 text-rose-200 rounded-lg px-3 py-2 text-sm mb-4">
-                {authError}
-              </div>
-            )}
-            <div className="space-y-3">
-              <input
-                type="email"
-                placeholder="Email"
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                className="w-full rounded-lg bg-slate-800 border border-slate-700 px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleAuth(); }}
-                className="w-full rounded-lg bg-slate-800 border border-slate-700 px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-              />
-              <button
-                onClick={handleAuth}
-                disabled={authLoading || !authEmail || !authPassword}
-                className="w-full rounded-lg bg-blue-600 text-white text-sm font-medium py-2.5 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
-              >
-                {authLoading ? "Please wait..." : authMode === "signin" ? "Sign In" : "Create Account"}
-              </button>
-              <button
-                onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthError(null); }}
-                className="w-full text-xs text-slate-500 hover:text-slate-300 transition"
-              >
-                {authMode === "signin" ? "Need an account? Sign up" : "Already have an account? Sign in"}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
         {/* Upload zone */}
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -411,8 +328,6 @@ export default function DocumentsPage() {
             </div>
           )}
         </div>
-          </>
-        )}
       </div>
 
       {/* Delete confirmation */}

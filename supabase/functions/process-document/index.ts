@@ -1,28 +1,29 @@
 // process-document: receives a document upload (PDF/TXT), validates it,
 // extracts text, splits into chunks, and stores chunks as knowledge_entries.
+// Also supports a "delete" action to remove a document and its chunks.
 //
 // Security:
-//   1. Requires a valid Supabase JWT — user MUST be authenticated.
-//      No owner_label fallback (Part 1 RLS fix removed anon access).
+//   1. Supports BOTH authenticated users (JWT verified) AND anonymous users
+//      (owner_label from localStorage — same trust model as chat_threads).
+//      Anonymous access is scoped by owner_label, a random UUID stored in
+//      the browser. Authenticated users are scoped by auth.uid().
 //   2. File validation: type check (PDF/TXT only), size limit (10MB),
 //      magic byte check for PDFs, binary detection for TXT.
-//   3. Storage path is always `<auth.uid()>/<uuid>-<sanitized-name>` —
-//      the folder name MUST match auth.uid() so Storage RLS allows it.
+//   3. Storage path is `<owner_key>/<uuid>-<sanitized-name>` where
+//      owner_key is auth.uid() for authenticated users or owner_label for
+//      anonymous users. The service-role client bypasses storage RLS.
 //   4. On re-processing (document_id provided), verifies the existing
-//      document belongs to the authenticated user before touching it.
-//   5. Duplicate prevention: if document_id is provided, old chunks are
-//      deleted only AFTER new extraction succeeds. If extraction fails,
-//      old chunks are preserved.
-//   6. Service-role key stays server-side only. User-supplied document_id
-//      and storage_path are NEVER trusted blindly — always verified against
-//      the authenticated user's records.
-//   7. Extracted document text is treated as untrusted input — the
+//      document belongs to the caller before touching it.
+//   5. For delete: verifies ownership before deleting storage + DB records.
+//   6. Extracted document text is treated as untrusted input — the
 //      gemini-chat function's system prompt instructs the AI never to
 //      follow instructions embedded inside retrieved documents.
 //
 // Flow:
 //   POST /process-document  (JSON with base64)
-//   -> authenticate -> validate file -> upload to private storage
+//   { action: "upload", file, fileName, ... }  -> upload + extract + chunk
+//   { action: "delete", documentId }            -> delete document + chunks + storage
+//   -> authenticate (JWT or owner_label) -> validate -> upload to private storage
 //   -> create user_documents row (status=pending)
 //   -> extract text -> chunk -> insert knowledge_entries
 //   -> update user_documents status to 'ready'
@@ -38,10 +39,11 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-const CHUNK_SIZE = 1000; // target ~1000 chars per chunk (within 800-1200 range)
-const CHUNK_OVERLAP = 0; // no overlap — avoids duplicate content in knowledge base
+const CHUNK_SIZE = 1000;
+const CHUNK_OVERLAP = 0;
 const ALLOWED_EXTENSIONS = new Set(["pdf", "txt"]);
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46]; // %PDF
 
@@ -63,23 +65,79 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // ---- Auth: require authenticated user ----
     const authHeader = req.headers.get("Authorization") ?? "";
-    const jwt = authHeader.replace("Bearer ", "");
-    if (!jwt) return json({ error: "Unauthorized: authentication required." }, 401);
+    const jwt = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
 
-    const supabase = createClient(SUPABASE_URL, SERVICE_KEY, {
+    // Service-role client for DB + storage operations (bypasses RLS)
+    const serviceClient = createClient(SUPABASE_URL, SERVICE_KEY, {
       auth: { persistSession: false },
     });
 
-    const { data: authData, error: authError } = await supabase.auth.getUser(jwt);
-    if (authError || !authData?.user?.id) {
-      return json({ error: "Unauthorized: invalid or expired session." }, 401);
-    }
-    const userId = authData.user.id;
+    // Resolve identity: authenticated user (JWT) or anonymous (owner_label)
+    let userId: string | null = null;
+    let ownerLabel: string | null = null;
 
-    // ---- Parse request (JSON with base64-encoded file) ----
+    if (jwt && jwt !== ANON_KEY) {
+      const { data: authData, error: authError } = await serviceClient.auth.getUser(jwt);
+      if (!authError && authData?.user?.id) {
+        userId = authData.user.id;
+      }
+    }
+
     const body = await req.json();
+    const action = body.action ?? "upload";
+
+    // For anonymous users, owner_label must be provided
+    if (!userId) {
+      ownerLabel = String(body.ownerLabel ?? "").trim() || null;
+      if (!ownerLabel) {
+        return json({ error: "Authentication required: provide a valid session or ownerLabel." }, 401);
+      }
+    }
+
+    // The owner key is used for storage path folder and ownership verification
+    const ownerKey = userId ?? ownerLabel!;
+
+    // ---- DELETE action ----
+    if (action === "delete") {
+      const documentId = String(body.documentId ?? "");
+      if (!documentId) return json({ error: "documentId is required for delete." }, 400);
+
+      const { data: doc, error: fetchErr } = await serviceClient
+        .from("user_documents")
+        .select("id, user_id, owner_label, storage_path")
+        .eq("id", documentId)
+        .maybeSingle();
+
+      if (fetchErr || !doc) {
+        return json({ error: "Document not found." }, 404);
+      }
+
+      // Verify ownership
+      const isOwner = userId
+        ? doc.user_id === userId
+        : doc.owner_label === ownerLabel;
+      if (!isOwner) {
+        return json({ error: "Forbidden: you do not own this document." }, 403);
+      }
+
+      // Delete storage file
+      if (doc.storage_path) {
+        await serviceClient.storage.from("user-documents").remove([doc.storage_path]);
+      }
+      // Delete DB record (cascades to knowledge_entries)
+      const { error: delErr } = await serviceClient
+        .from("user_documents")
+        .delete()
+        .eq("id", documentId);
+
+      if (delErr) {
+        return json({ error: "Failed to delete document: " + delErr.message }, 500);
+      }
+      return json({ success: true }, 200);
+    }
+
+    // ---- UPLOAD action (default) ----
     const base64 = String(body.file ?? "");
     const fileName = String(body.fileName ?? "document");
     const title = String(body.title ?? fileName).trim();
@@ -100,7 +158,6 @@ Deno.serve(async (req: Request) => {
       return json({ error: "File too large. Maximum size is 10 MB." }, 400);
     }
 
-    // Determine actual file type by extension + magic bytes
     const ext = fileName.toLowerCase().split(".").pop() ?? "";
     if (!ALLOWED_EXTENSIONS.has(ext)) {
       return json({ error: `Unsupported file type: .${ext}. Only PDF and TXT files are accepted.` }, 400);
@@ -119,21 +176,24 @@ Deno.serve(async (req: Request) => {
       detectedType = "txt";
     }
 
-    // ---- Re-processing: verify ownership of existing document ----
+    // ---- Re-processing: verify ownership ----
     let existingDocId: string | null = null;
     let existingStoragePath: string | null = null;
 
     if (reprocessDocId) {
-      const { data: existing, error: fetchErr } = await supabase
+      const { data: existing, error: fetchErr } = await serviceClient
         .from("user_documents")
-        .select("id, user_id, storage_path")
+        .select("id, user_id, owner_label, storage_path")
         .eq("id", reprocessDocId)
         .maybeSingle();
 
       if (fetchErr || !existing) {
         return json({ error: "Document not found for re-processing." }, 404);
       }
-      if (existing.user_id !== userId) {
+      const isOwner = userId
+        ? existing.user_id === userId
+        : existing.owner_label === ownerLabel;
+      if (!isOwner) {
         return json({ error: "Forbidden: you do not own this document." }, 403);
       }
       existingDocId = existing.id;
@@ -142,11 +202,10 @@ Deno.serve(async (req: Request) => {
 
     // ---- Create or reuse user_documents record ----
     let documentId: string;
-    const storagePath = `${userId}/${crypto.randomUUID()}-${sanitizeFileName(fileName)}`;
+    const storagePath = `${ownerKey}/${crypto.randomUUID()}-${sanitizeFileName(fileName)}`;
 
     if (existingDocId) {
-      // Update existing record to pending, keep old chunks until success
-      const { error: updateErr } = await supabase
+      const { error: updateErr } = await serviceClient
         .from("user_documents")
         .update({
           title,
@@ -165,11 +224,11 @@ Deno.serve(async (req: Request) => {
       }
       documentId = existingDocId;
     } else {
-      const { data: docRecord, error: docError } = await supabase
+      const { data: docRecord, error: docError } = await serviceClient
         .from("user_documents")
         .insert({
           user_id: userId,
-          owner_label: null,
+          owner_label: ownerLabel,
           title,
           file_name: fileName,
           file_type: detectedType,
@@ -186,8 +245,8 @@ Deno.serve(async (req: Request) => {
       documentId = docRecord.id;
     }
 
-    // ---- Upload to storage ----
-    const { error: uploadError } = await supabase.storage
+    // ---- Upload to storage (service role bypasses RLS) ----
+    const { error: uploadError } = await serviceClient.storage
       .from("user-documents")
       .upload(storagePath, fileBytes, {
         contentType: detectedType === "pdf" ? "application/pdf" : "text/plain",
@@ -195,7 +254,7 @@ Deno.serve(async (req: Request) => {
       });
 
     if (uploadError) {
-      await supabase.from("user_documents").update({
+      await serviceClient.from("user_documents").update({
         status: "failed",
         error_message: "Storage upload failed: " + uploadError.message,
       }).eq("id", documentId);
@@ -212,25 +271,23 @@ Deno.serve(async (req: Request) => {
       }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : "Unknown extraction error";
-      await supabase.from("user_documents").update({
+      await serviceClient.from("user_documents").update({
         status: "failed",
         error_message: errMsg,
       }).eq("id", documentId);
-      // Clean up the new uploaded file (old file preserved if re-processing)
-      await supabase.storage.from("user-documents").remove([storagePath]);
+      await serviceClient.storage.from("user-documents").remove([storagePath]);
       return json({ error: errMsg }, 422);
     }
 
-    // Check if we got any meaningful text
     const cleanedText = extractedText.trim();
     if (cleanedText.length < 10) {
       const errMsg = "No readable text could be extracted from this file. If it is a scanned PDF (image-only), OCR is required but not currently supported. Please upload a text-based PDF or a TXT file.";
-      await supabase.from("user_documents").update({
+      await serviceClient.from("user_documents").update({
         status: "failed",
         error_message: errMsg,
         content_text: cleanedText.length > 0 ? cleanedText : null,
       }).eq("id", documentId);
-      await supabase.storage.from("user-documents").remove([storagePath]);
+      await serviceClient.storage.from("user-documents").remove([storagePath]);
       return json({ error: errMsg }, 422);
     }
 
@@ -240,25 +297,23 @@ Deno.serve(async (req: Request) => {
 
     // ---- Replace old chunks if re-processing ----
     if (existingDocId) {
-      const { error: delErr } = await supabase
+      const { error: delErr } = await serviceClient
         .from("knowledge_entries")
         .delete()
         .eq("document_id", documentId);
 
       if (delErr) {
-        // Non-fatal: old chunks may remain, but we proceed with new ones
         console.warn("Failed to delete old chunks:", delErr.message);
       }
-      // Clean up old storage file
       if (existingStoragePath && existingStoragePath !== storagePath) {
-        await supabase.storage.from("user-documents").remove([existingStoragePath]);
+        await serviceClient.storage.from("user-documents").remove([existingStoragePath]);
       }
     }
 
     // ---- Insert chunks as knowledge_entries ----
     const entries = chunks.map((chunk, i) => ({
       user_id: userId,
-      owner_label: null,
+      owner_label: ownerLabel,
       title: `${title} (part ${i + 1}/${totalChunks})`,
       content: chunk,
       tags: [] as string[],
@@ -271,22 +326,20 @@ Deno.serve(async (req: Request) => {
       total_chunks: totalChunks,
     }));
 
-    const { error: chunkError } = await supabase
+    const { error: chunkError } = await serviceClient
       .from("knowledge_entries")
       .insert(entries);
 
     if (chunkError) {
-      await supabase.from("user_documents").update({
+      await serviceClient.from("user_documents").update({
         status: "failed",
         error_message: "Failed to store document chunks: " + chunkError.message,
       }).eq("id", documentId);
-      // Don't delete old chunks — we already deleted them above.
-      // The document status reflects the failure.
       return json({ error: "Failed to store document chunks: " + chunkError.message }, 500);
     }
 
     // ---- Update document status ----
-    await supabase.from("user_documents").update({
+    await serviceClient.from("user_documents").update({
       status: "ready",
       content_text: cleanedText.slice(0, 50000),
       chunk_count: totalChunks,
@@ -310,11 +363,8 @@ Deno.serve(async (req: Request) => {
 });
 
 // ---- PDF text extraction ----
-// Uses pdf-parse via npm: import for Deno. Works for text-based PDFs.
-// Scanned/image-only PDFs return empty text — caller handles that.
 async function extractPdfText(bytes: Uint8Array): Promise<string> {
   try {
-    // Buffer polyfill for Deno — pdf-parse expects a Node.js Buffer
     const { Buffer } = await import("node:buffer");
     const pdfParse = (await import("npm:pdf-parse@1.1.1")).default;
     const buffer = Buffer.from(bytes);
@@ -335,8 +385,6 @@ function decodeText(bytes: Uint8Array): string {
 }
 
 // ---- Chunking ----
-// Splits text into ~CHUNK_SIZE character chunks, trying to break at
-// sentence boundaries (English . ! ? and Bengali ।) or newlines.
 function chunkText(text: string, size: number): string[] {
   if (text.length <= size) return [text];
 
@@ -348,7 +396,6 @@ function chunkText(text: string, size: number): string[] {
       chunks.push(text.slice(start).trim());
       break;
     }
-    // Try to break at a sentence boundary or newline in the last 20% of the chunk
     const searchStart = start + Math.floor(size * 0.8);
     const slice = text.slice(searchStart, end);
     const lastNewline = slice.lastIndexOf("\n");
@@ -364,7 +411,6 @@ function chunkText(text: string, size: number): string[] {
     }
     const chunk = text.slice(start, end).trim();
     if (chunk.length > 0) chunks.push(chunk);
-    // Ensure forward progress: next start must be beyond current start
     if (end <= start) {
       start = start + 1;
     } else {
@@ -382,13 +428,11 @@ function isPdfMagic(bytes: Uint8Array): boolean {
 }
 
 function isTextFile(bytes: Uint8Array): boolean {
-  // Check first 512 bytes for binary content
   const checkLen = Math.min(bytes.length, 512);
   let nullCount = 0;
   for (let i = 0; i < checkLen; i++) {
     if (bytes[i] === 0) nullCount++;
   }
-  // Text files should have very few null bytes
   return nullCount < checkLen * 0.1;
 }
 
