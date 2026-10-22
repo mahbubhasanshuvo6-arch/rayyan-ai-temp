@@ -1319,6 +1319,14 @@ Deno.serve(async (req: Request) => {
         effectiveSystem += memoryBlock;
       }
 
+      // ---- Learning context injection ----
+      // The frontend sends body.learningContext with the user's active goals,
+      // skill levels, and recent lesson completions so the AI can tailor
+      // explanations to the user's level and reference their progress.
+      if (body.learningContext && typeof body.learningContext === "string" && body.learningContext.trim()) {
+        effectiveSystem += "\n\n" + body.learningContext;
+      }
+
       // Gemini "contents" array.
       // Attachments: images go as inlineData parts, text files are appended
       // to the message text. Only Gemini supports inline images.

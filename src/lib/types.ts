@@ -79,6 +79,47 @@ export interface KnowledgeEntry {
   updated_at: string;
 }
 
+export interface LearningGoal {
+  id: string;
+  user_id: string | null;
+  owner_label: string | null;
+  goal: string;
+  category: string;
+  skill_level: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LearningProgress {
+  id: string;
+  user_id: string | null;
+  owner_label: string | null;
+  goal_id: string | null;
+  lesson_id: string;
+  lesson_title: string | null;
+  lesson_type: string;
+  status: string;
+  score: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CodeSnippet {
+  id: string;
+  user_id: string | null;
+  owner_label: string | null;
+  title: string;
+  language: string;
+  code: string;
+  description: string | null;
+  tags: string[] | null;
+  thread_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface UserDocument {
   id: string;
   user_id: string | null;

@@ -17,11 +17,13 @@ import {
 } from "@/lib/voice";
 import { loadWakeWordSettings, detectWakeWord, type WakeWordSettings } from "@/lib/wakeWord";
 import { useAuth } from "@/lib/useAuth";
+import { useLearning, GOAL_CATEGORIES, SKILL_LEVELS } from "@/lib/useLearning";
 import {
   type Attachment, createAttachment, validateFile, formatFileSize, createThumbnail,
   isPdfType, isImageType, isTextType, extractFileText,
 } from "@/lib/attachments";
 import type { ChatMessageAttachment } from "@/lib/types";
+import { GraduationCap, Target, Plus as PlusIcon, Code, Trash2 as TrashIcon } from "lucide-react";
 
 const SESSION_LABEL_KEY = "rayyan_owner_label";
 
@@ -103,6 +105,36 @@ export default function ChatPage() {
   const startListeningRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const bargeInWatcherRef = useRef<STTController | null>(null);
   const bargeInProgressRef = useRef(false);
+  const learning = useLearning(ownerLabel, !!session);
+  const [showLearningPanel, setShowLearningPanel] = useState(false);
+  const [newGoalText, setNewGoalText] = useState("");
+  const [newGoalCategory, setNewGoalCategory] = useState("programming");
+  const [newGoalLevel, setNewGoalLevel] = useState("beginner");
+  const [showSnippetForm, setShowSnippetForm] = useState(false);
+  const [snippetTitle, setSnippetTitle] = useState("");
+  const [snippetLang, setSnippetLang] = useState("python");
+  const [snippetCode, setSnippetCode] = useState("");
+
+  const learningContext = (() => {
+    const activeGoals = learning.goals.filter((g) => g.status === "active");
+    if (activeGoals.length === 0 && learning.progress.length === 0) return undefined;
+    const parts: string[] = ["LEARNING CONTEXT (use to tailor explanations to this user's level and goals):"];
+    if (activeGoals.length > 0) {
+      parts.push("Active learning goals:");
+      for (const g of activeGoals.slice(0, 5)) {
+        parts.push(`- ${g.goal} (${g.category}, ${g.skill_level} level)`);
+      }
+    }
+    const recentProgress = learning.progress.slice(0, 8);
+    if (recentProgress.length > 0) {
+      parts.push("Recently completed lessons:");
+      for (const p of recentProgress) {
+        parts.push(`- ${p.lesson_title ?? p.lesson_id} (${p.lesson_type}, ${p.status})`);
+      }
+    }
+    parts.push("Adapt explanation depth to the user's skill level. Reference their progress when relevant. Do not repeat completed lessons unless asked.");
+    return parts.join("\n");
+  })();
 
   // Load threads.
   const loadThreads = useCallback(async () => {
@@ -326,6 +358,7 @@ export default function ChatPage() {
           history,
           ownerLabel: session ? null : ownerLabel,
           memory: memoryStrings.length > 0 ? memoryStrings : undefined,
+          learningContext,
           authorization:
             scope.scope || scope.target || scope.relationship
               ? scope
@@ -725,6 +758,12 @@ export default function ChatPage() {
         </div>
 
         <div className="absolute bottom-0 left-0 right-0 p-3 border-t border-slate-800">
+          <button
+            onClick={() => setShowLearningPanel((v) => !v)}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition"
+          >
+            <GraduationCap className="w-4 h-4" /> Learning
+          </button>
           <button
             onClick={() => navigate("builder")}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition"
