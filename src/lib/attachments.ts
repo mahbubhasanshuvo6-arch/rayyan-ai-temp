@@ -1,0 +1,121 @@
+// Attachment handling: file validation, reading, and base64 conversion.
+// Gemini supports inline image data (up to ~20MB per image) and text files.
+
+export interface Attachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  dataUrl: string; // data URL for preview + transport
+  isImage: boolean;
+}
+
+export const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+export const MAX_TOTAL_SIZE = 50 * 1024 * 1024; // 50 MB total
+export const MAX_ATTACHMENTS = 5;
+
+const IMAGE_TYPES = [
+  "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/heic", "image/heif",
+];
+const TEXT_TYPES = [
+  "text/plain", "text/csv", "text/markdown", "text/html",
+  "application/json", "application/xml",
+  ".txt", ".md", ".csv", ".json", ".xml", ".html", ".js", ".ts", ".py", ".java",
+];
+
+export function isImageType(type: string, name: string): boolean {
+  if (IMAGE_TYPES.some((t) => type === t)) return true;
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  return ["png", "jpg", "jpeg", "webp", "gif", "heic", "heif"].includes(ext);
+}
+
+function isTextType(type: string, name: string): boolean {
+  if (TEXT_TYPES.includes(type)) return true;
+  const ext = "." + (name.toLowerCase().split(".").pop() ?? "");
+  return TEXT_TYPES.includes(ext);
+}
+
+export function isSupportedType(type: string, name: string): boolean {
+  return isImageType(type, name) || isTextType(type, name);
+}
+
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  error?: string;
+}
+
+export function validateFile(file: File, currentTotal: number, currentCount: number): ValidationResult {
+  if (currentCount >= MAX_ATTACHMENTS) {
+    return { ok: false, error: `সর্বোচ্চ ${MAX_ATTACHMENTS}টি ফাইল যুক্ত করা যাবে।` };
+  }
+  if (!isSupportedType(file.type, file.name)) {
+    return { ok: false, error: `"${file.name}" — এই ধরনের ফাইল সমর্থিত নয়। ছবি বা টেক্সট ফাইল ব্যবহার করুন।` };
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    return { ok: false, error: `"${file.name}" — ফাইলের সাইজ ${formatFileSize(file.size)}। সর্বোচ্চ ${formatFileSize(MAX_FILE_SIZE)} অনুমোদিত।` };
+  }
+  if (currentTotal + file.size > MAX_TOTAL_SIZE) {
+    return { ok: false, error: `মোট ফাইল সাইজ ${formatFileSize(MAX_TOTAL_SIZE)} অতিক্রম করবে।` };
+  }
+  return { ok: true };
+}
+
+export function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error(`"${file.name}" পড়তে ব্যর্থ।`));
+    reader.readAsDataURL(file);
+  });
+}
+
+export function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error(`"${file.name}" পড়তে ব্যর্থ।`));
+    reader.readAsText(file);
+  });
+}
+
+export async function createAttachment(file: File): Promise<Attachment> {
+  const isImage = isImageType(file.type, file.name);
+  const dataUrl = isImage
+    ? await readFileAsDataURL(file)
+    : await readFileAsDataURL(file);
+  return {
+    id: crypto.randomUUID(),
+    name: file.name,
+    type: file.type || (isImage ? "image/jpeg" : "text/plain"),
+    size: file.size,
+    dataUrl,
+    isImage,
+  };
+}
+
+// Extract the base64 portion (without the data: prefix) from a data URL.
+export function dataUrlToBase64(dataUrl: string): string {
+  const idx = dataUrl.indexOf(",");
+  return idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl;
+}
+
+// Extract the MIME type from a data URL.
+export function dataUrlToMime(dataUrl: string): string {
+  const match = dataUrl.match(/^data:([^;]+)/);
+  return match ? match[1] : "application/octet-stream";
+}
+
+// Build the text content for a non-image attachment to send to the AI.
+export async function attachmentToTextContent(att: Attachment): Promise<string> {
+  const response = await fetch(att.dataUrl);
+  const blob = await response.blob();
+  const text = await blob.text();
+  const truncated = text.length > 50000 ? text.slice(0, 50000) + "\n\n[... truncated ...]" : text;
+  return `[Attached file: ${att.name}]\n\n${truncated}`;
+}

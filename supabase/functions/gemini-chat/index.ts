@@ -260,7 +260,7 @@ const HF_TIMEOUT_MS = 30000;
 async function callGemini(
   model: string,
   systemPrompt: string,
-  contents: Array<{ role: string; parts: Array<{ text: string }> }>,
+  contents: Array<{ role: string; parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> }>,
   temperature: number,
   maxTokens: number,
   signal?: AbortSignal
@@ -295,7 +295,7 @@ async function callGemini(
     const finishReason = cand?.finishReason ?? "STOP";
     const text =
       cand?.content?.parts
-        ?.map((p: { text?: string }) => p.text)
+        ?.map((p: { text?: string }) => p.text ?? "")
         .join("") ?? "";
     const usage = data?.usageMetadata ?? {};
     const pt = usage.promptTokenCount ?? 0;
@@ -1204,7 +1204,7 @@ Deno.serve(async (req: Request) => {
       const message: string = body.message ?? "";
       const confirmed: boolean = body.confirmed === true;
 
-      if (!message) return json({ error: "Message is required." }, 400);
+      if (!message && !Array.isArray(body.attachments)) return json({ error: "Message is required." }, 400);
 
       // Build a tool-aware system prompt.
       let effectiveSystem = s.system_prompt;
@@ -1314,6 +1314,60 @@ Deno.serve(async (req: Request) => {
       }
 
       // Gemini "contents" array.
+      // Attachments: images go as inlineData parts, text files are appended
+      // to the message text. Only Gemini supports inline images.
+      interface AttachmentPayload {
+        name: string;
+        type: string;
+        isImage: boolean;
+        dataUrl: string;
+      }
+      const attachments: AttachmentPayload[] = Array.isArray(body.attachments)
+        ? body.attachments.filter((a: unknown): a is AttachmentPayload => {
+            if (typeof a !== "object" || a === null) return false;
+            const o = a as Record<string, unknown>;
+            return typeof o.dataUrl === "string" && typeof o.name === "string";
+          }).map((a) => ({
+            name: String(a.name),
+            type: String(a.type ?? ""),
+            isImage: Boolean(a.isImage),
+            dataUrl: String(a.dataUrl),
+          }))
+        : [];
+
+      const imageAttachments = attachments.filter((a) => a.isImage);
+      const textAttachments = attachments.filter((a) => !a.isImage);
+
+      // Append text file contents to the message so all providers can see them.
+      let enrichedMessage = message;
+      for (const ta of textAttachments) {
+        const commaIdx = ta.dataUrl.indexOf(",");
+        const base64 = commaIdx >= 0 ? ta.dataUrl.slice(commaIdx + 1) : ta.dataUrl;
+        try {
+          const decoded = atob(base64);
+          const truncated = decoded.length > 50000
+            ? decoded.slice(0, 50000) + "\n\n[... truncated ...]"
+            : decoded;
+          enrichedMessage += `\n\n[Attached file: ${ta.name}]\n${truncated}`;
+        } catch { /* ignore decode errors */ }
+      }
+
+      const userParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+      if (enrichedMessage) {
+        userParts.push({ text: enrichedMessage });
+      }
+      for (const img of imageAttachments) {
+        const commaIdx = img.dataUrl.indexOf(",");
+        const base64 = commaIdx >= 0 ? img.dataUrl.slice(commaIdx + 1) : img.dataUrl;
+        const mimeMatch = img.dataUrl.match(/^data:([^;]+)/);
+        const mime = mimeMatch ? mimeMatch[1] : img.type || "image/jpeg";
+        userParts.push({ inlineData: { mimeType: mime, data: base64 } });
+      }
+      // Ensure at least one part exists.
+      if (userParts.length === 0) {
+        userParts.push({ text: message });
+      }
+
       const contents = [
         ...history
           .filter((m) => m.role !== "system")
@@ -1321,7 +1375,7 @@ Deno.serve(async (req: Request) => {
             role: m.role === "assistant" ? "model" : "user",
             parts: [{ text: m.content }],
           })),
-        { role: "user", parts: [{ text: message }] },
+        { role: "user", parts: userParts },
       ];
 
       // Trimmed system prompt for Groq fallback calls. The full effectiveSystem
@@ -1347,7 +1401,7 @@ Deno.serve(async (req: Request) => {
         try {
           result = await callHuggingFace(
             s.model, effectiveSystem,
-            [...history, { role: "user", content: message }],
+            [...history, { role: "user", content: enrichedMessage }],
             s.temperature, s.max_tokens
           );
           if (isGarbageResponse(result)) {
@@ -1366,7 +1420,7 @@ Deno.serve(async (req: Request) => {
         try {
           result = await callGroq(
             s.model, effectiveSystem,
-            [...history, { role: "user", content: message }],
+            [...history, { role: "user", content: enrichedMessage }],
             s.temperature, s.max_tokens
           );
           if (isGarbageResponse(result)) {
@@ -1451,7 +1505,7 @@ Deno.serve(async (req: Request) => {
           const groqModel = groqModelsToTry[gi];
           try {
             result = await callGroq(
-              groqModel, groqSystemPrompt, [...history, { role: "user", content: message }],
+              groqModel, groqSystemPrompt, [...history, { role: "user", content: enrichedMessage }],
               s.temperature, s.max_tokens
             );
             if (isGarbageResponse(result)) {
@@ -1470,7 +1524,7 @@ Deno.serve(async (req: Request) => {
               await sleep(delay * 1000);
               try {
                 result = await callGroq(
-                  groqModel, groqSystemPrompt, [...history, { role: "user", content: message }],
+                  groqModel, groqSystemPrompt, [...history, { role: "user", content: enrichedMessage }],
                   s.temperature, s.max_tokens
                 );
                 if (isGarbageResponse(result)) {
@@ -1564,7 +1618,7 @@ Deno.serve(async (req: Request) => {
         try {
           result = await callOpenRouter(
             "openrouter/free", effectiveSystem,
-            [...history, { role: "user", content: message }],
+            [...history, { role: "user", content: enrichedMessage }],
             s.temperature, s.max_tokens
           );
           if (isGarbageResponse(result)) {
@@ -1652,7 +1706,7 @@ Deno.serve(async (req: Request) => {
           } else {
             result = await continueGroq(
               result.model, effectiveSystem,
-              [...history, { role: "user", content: message }],
+              [...history, { role: "user", content: enrichedMessage }],
               accumulatedText, s.temperature, s.max_tokens
             );
           }
@@ -1745,7 +1799,7 @@ Deno.serve(async (req: Request) => {
                     followUp = await callGroq(
                       s.fallback_model,
                       followSystem + researchContext + citationInstruction,
-                      [...history, { role: "user", content: message }],
+                      [...history, { role: "user", content: enrichedMessage }],
                       s.temperature,
                       s.max_tokens
                     );
@@ -1761,7 +1815,7 @@ Deno.serve(async (req: Request) => {
                 followUp = await callGroq(
                   result.model,
                   followSystem + researchContext + citationInstruction,
-                  [...history, { role: "user", content: message }],
+                  [...history, { role: "user", content: enrichedMessage }],
                   s.temperature,
                   s.max_tokens
                 );

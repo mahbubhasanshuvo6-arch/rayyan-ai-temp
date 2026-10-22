@@ -7,7 +7,7 @@ import {
   Mic, MicOff, Plus, MessageSquare, Trash2,
   Menu, X, Sparkles, Loader2, Volume2, Square, Bot, User, Settings,
   Globe, Brain, Check, X as XIcon, ShieldCheck, BookOpen, Code2, PackageSearch,
-  ExternalLink, ArrowUp, AudioLines, Paperclip,
+  ExternalLink, ArrowUp, AudioLines, Paperclip, Camera, Image as ImageIcon, FileText, XCircle,
 } from "lucide-react";
 import {
   loadVoiceSettings, saveVoiceSettings, createRecognizer, createSpeaker,
@@ -16,6 +16,10 @@ import {
 } from "@/lib/voice";
 import { loadWakeWordSettings, saveWakeWordSettings, detectWakeWord, WAKE_WORD_STATUS_NOTE, type WakeWordSettings } from "@/lib/wakeWord";
 import { useAuth } from "@/lib/useAuth";
+import {
+  type Attachment, createAttachment, validateFile, formatFileSize,
+  isSupportedType, MAX_ATTACHMENTS,
+} from "@/lib/attachments";
 
 const SESSION_LABEL_KEY = "rayyan_owner_label";
 
@@ -80,6 +84,11 @@ export default function ChatPage() {
   const [conversationMode, setConversationMode] = useState(false);
   const [interimText, setInterimText] = useState("");
   const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [attachmentLoading, setAttachmentLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const ownerLabel = getOrCreateOwnerLabel();
   const { session } = useAuth();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -140,8 +149,35 @@ export default function ChatPage() {
     loadThreads();
   };
 
+  const addFiles = async (files: FileList | File[]) => {
+    const fileArr = Array.from(files);
+    if (fileArr.length === 0) return;
+    setAttachmentError(null);
+    setAttachmentLoading(true);
+    const currentTotal = attachments.reduce((s, a) => s + a.size, 0);
+    for (const file of fileArr) {
+      const val = validateFile(file, currentTotal, attachments.length);
+      if (!val.ok) {
+        setAttachmentError(val.error ?? "ফাইল যুক্ত করতে সমস্যা।");
+        continue;
+      }
+      try {
+        const att = await createAttachment(file);
+        setAttachments((prev) => [...prev, att]);
+      } catch {
+        setAttachmentError(`"${file.name}" পড়তে ব্যর্থ।`);
+      }
+    }
+    setAttachmentLoading(false);
+    setShowPlusMenu(false);
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
   const sendMessage = async () => {
-    if (!input.trim() || sending) return;
+    if ((!input.trim() && attachments.length === 0) || sending) return;
     if (!settings.chat_enabled) {
       setError("Chat is currently disabled by the administrator.");
       return;
