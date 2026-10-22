@@ -98,6 +98,46 @@ Deno.serve(async (req: Request) => {
     // The owner key is used for storage path folder and ownership verification
     const ownerKey = userId ?? ownerLabel!;
 
+    // ---- EXTRACT action (for chat attachments — no DB/storage) ----
+    if (action === "extract") {
+      const base64 = String(body.file ?? "");
+      const fileName = String(body.fileName ?? "file");
+      if (!base64) return json({ error: "No file data provided." }, 400);
+
+      const binary = atob(base64);
+      const fileBytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) fileBytes[i] = binary.charCodeAt(i);
+
+      if (fileBytes.length === 0) return json({ error: "Empty file." }, 400);
+      if (fileBytes.length > MAX_FILE_SIZE) return json({ error: "File too large. Maximum size is 10 MB." }, 400);
+
+      const ext = fileName.toLowerCase().split(".").pop() ?? "";
+      let detectedType: "pdf" | "txt";
+      if (ext === "pdf" || isPdfMagic(fileBytes)) {
+        if (!isPdfMagic(fileBytes)) {
+          return json({ error: "Invalid PDF file." }, 400);
+        }
+        detectedType = "pdf";
+      } else {
+        if (!isTextFile(fileBytes)) return json({ error: "File appears to be binary." }, 400);
+        detectedType = "txt";
+      }
+
+      let extractedText: string;
+      try {
+        extractedText = detectedType === "pdf" ? await extractPdfText(fileBytes) : decodeText(fileBytes);
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : "Extraction failed." }, 422);
+      }
+
+      const cleaned = extractedText.trim();
+      if (cleaned.length < 10) {
+        return json({ error: "No readable text could be extracted. If this is a scanned PDF, OCR is not supported." }, 422);
+      }
+
+      return json({ text: cleaned.slice(0, 50000), fileName, fileType: detectedType }, 200);
+    }
+
     // ---- DELETE action ----
     if (action === "delete") {
       const documentId = String(body.documentId ?? "");

@@ -18,6 +18,7 @@ import { loadWakeWordSettings, detectWakeWord, type WakeWordSettings } from "@/l
 import { useAuth } from "@/lib/useAuth";
 import {
   type Attachment, createAttachment, validateFile, formatFileSize, createThumbnail,
+  isPdfType, extractFileText,
 } from "@/lib/attachments";
 import type { ChatMessageAttachment } from "@/lib/types";
 
@@ -90,6 +91,8 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
+  const [docProcessing, setDocProcessing] = useState(false);
   const ownerLabel = getOrCreateOwnerLabel();
   const { session } = useAuth();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -173,6 +176,31 @@ export default function ChatPage() {
     }
     setAttachmentLoading(false);
     setShowPlusMenu(false);
+  };
+
+  const addDocumentFile = async (file: File) => {
+    if (!isPdfType(file.type, file.name) && !file.type.startsWith("text/")) {
+      setAttachmentError("শুধু PDF এবং TXT ফাইল সমর্থিত।");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setAttachmentError("ফাইলের সাইজ 10 MB এর বেশি হতে পারবে না।");
+      return;
+    }
+    setDocProcessing(true);
+    setAttachmentError(null);
+    setShowPlusMenu(false);
+    try {
+      const authToken = session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY;
+      const extractedText = await extractFileText(file, authToken, session ? undefined : ownerLabel);
+      const att = await createAttachment(file);
+      att.extractedText = extractedText;
+      setAttachments((prev) => [...prev, att]);
+    } catch (e) {
+      setAttachmentError(e instanceof Error ? e.message : "ফাইল প্রসেস করতে সমস্যা।");
+    } finally {
+      setDocProcessing(false);
+    }
   };
 
   const removeAttachment = (id: string) => {
@@ -286,12 +314,24 @@ export default function ChatPage() {
               ? scope
               : undefined,
           attachments: attachments.length > 0
-            ? attachments.map((a) => ({
-                name: a.name,
-                type: a.type,
-                isImage: a.isImage,
-                dataUrl: a.dataUrl,
-              }))
+            ? attachments.map((a) => {
+                // For PDF attachments, send the extracted text as a text attachment
+                // so the AI can read the document contents.
+                if (a.isPdf && a.extractedText) {
+                  return {
+                    name: a.name,
+                    type: "text/plain",
+                    isImage: false,
+                    dataUrl: `data:text/plain;base64,${btoa(unescape(encodeURIComponent(a.extractedText)))}`,
+                  };
+                }
+                return {
+                  name: a.name,
+                  type: a.type,
+                  isImage: a.isImage,
+                  dataUrl: a.dataUrl,
+                };
+              })
             : undefined,
         }),
       });
@@ -896,11 +936,28 @@ export default function ChatPage() {
               className="hidden"
               onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
             />
+            <input
+              ref={documentInputRef}
+              type="file"
+              accept=".pdf,.txt,application/pdf,text/plain"
+              className="hidden"
+              onChange={(e) => { if (e.target.files?.[0]) addDocumentFile(e.target.files[0]); e.target.value = ""; }}
+            />
 
             {/* Pill-shaped input container */}
             <div className="flex items-end gap-2 bg-slate-800 border border-slate-700 rounded-[28px] px-2.5 sm:px-3 py-2 shadow-lg">
-                {/* Left: Plus button with dropdown menu */}
-                <div className="relative shrink-0">
+                {/* Left: Document (paperclip) button + Plus menu */}
+                <div className="relative shrink-0 flex items-center">
+                  <button
+                    onClick={() => { documentInputRef.current?.click(); setAttachmentError(null); }}
+                    disabled={docProcessing}
+                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition shrink-0 text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-40"
+                    title="PDF বা TXT ফাইল যুক্ত করুন"
+                    aria-label="Attach document"
+                  >
+                    {docProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileText className="w-5 h-5" />}
+                  </button>
+                  <div className="relative shrink-0">
                   <button
                     onClick={() => { setShowPlusMenu((v) => !v); setAttachmentError(null); }}
                     className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition shrink-0 ${
@@ -926,11 +983,18 @@ export default function ChatPage() {
                           <ImageIcon className="w-4 h-4 text-slate-400" /> গ্যালারি থেকে ছবি
                         </button>
                         <button
+                          onClick={() => { documentInputRef.current?.click(); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                          aria-label="Upload document"
+                        >
+                          <FileText className="w-4 h-4 text-slate-400" /> PDF / টেক্সট ফাইল
+                        </button>
+                        <button
                           onClick={() => { fileInputRef.current?.click(); }}
                           className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
                           aria-label="Upload file"
                         >
-                          <FileText className="w-4 h-4 text-slate-400" /> ফাইল আপলোড
+                          <FileText className="w-4 h-4 text-slate-400" /> অন্যান্য ফাইল
                         </button>
                         <button
                           onClick={() => { cameraInputRef.current?.click(); }}
@@ -965,6 +1029,7 @@ export default function ChatPage() {
                       </div>
                     </>
                   )}
+                  </div>
                 </div>
 
                 {/* Center: Textarea */}

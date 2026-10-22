@@ -8,6 +8,8 @@ export interface Attachment {
   size: number;
   dataUrl: string; // data URL for preview + transport
   isImage: boolean;
+  isPdf: boolean;
+  extractedText?: string; // for PDF attachments, extracted via edge function
 }
 
 export const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
@@ -22,6 +24,13 @@ const TEXT_TYPES = [
   "application/json", "application/xml",
   ".txt", ".md", ".csv", ".json", ".xml", ".html", ".js", ".ts", ".py", ".java",
 ];
+const PDF_TYPES = ["application/pdf", ".pdf"];
+
+export function isPdfType(type: string, name: string): boolean {
+  if (PDF_TYPES.includes(type)) return true;
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  return ext === "pdf";
+}
 
 export function isImageType(type: string, name: string): boolean {
   if (IMAGE_TYPES.some((t) => type === t)) return true;
@@ -36,7 +45,7 @@ function isTextType(type: string, name: string): boolean {
 }
 
 export function isSupportedType(type: string, name: string): boolean {
-  return isImageType(type, name) || isTextType(type, name);
+  return isImageType(type, name) || isTextType(type, name) || isPdfType(type, name);
 }
 
 export function formatFileSize(bytes: number): string {
@@ -86,17 +95,59 @@ export function readFileAsText(file: File): Promise<string> {
 
 export async function createAttachment(file: File): Promise<Attachment> {
   const isImage = isImageType(file.type, file.name);
-  const dataUrl = isImage
-    ? await readFileAsDataURL(file)
-    : await readFileAsDataURL(file);
+  const isPdf = isPdfType(file.type, file.name);
+  const dataUrl = await readFileAsDataURL(file);
   return {
     id: crypto.randomUUID(),
     name: file.name,
-    type: file.type || (isImage ? "image/jpeg" : "text/plain"),
+    type: file.type || (isImage ? "image/jpeg" : isPdf ? "application/pdf" : "text/plain"),
     size: file.size,
     dataUrl,
     isImage,
+    isPdf,
   };
+}
+
+// Extract text from a PDF (or TXT) file via the process-document edge function.
+// Returns the extracted text, or throws on failure.
+export async function extractFileText(
+  file: File,
+  authToken: string,
+  ownerLabel?: string,
+): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
+  }
+  const base64 = btoa(binary);
+
+  const body: Record<string, unknown> = {
+    action: "extract",
+    file: base64,
+    fileName: file.name,
+  };
+  if (ownerLabel) body.ownerLabel = ownerLabel;
+
+  const res = await fetch(
+    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-document`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(body),
+    },
+  );
+
+  const result = await res.json();
+  if (!res.ok) {
+    throw new Error(result.error ?? "Failed to extract file contents.");
+  }
+  return result.text as string;
 }
 
 // Extract the base64 portion (without the data: prefix) from a data URL.
