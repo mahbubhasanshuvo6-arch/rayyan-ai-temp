@@ -156,8 +156,10 @@ function isGarbageResponse(result: ProviderResult): boolean {
   if (text.length < 10 && !/[.!?।؟]/.test(text)) return true;
   // Known OpenRouter free-model placeholder/garbage patterns.
   const low = text.toLowerCase();
-  if (low === "user safety: safe") return true;
+  if (/^(user safety|response safety|safety)\s*[:.]?\s*safe$/im.test(text)) return true;
   if (/^(user safety|safety|safe|ok|okay|done|hello|hi|hey)\s*[:.]?\s*(safe|ok|done|yes|no)?$/i.test(text)) return true;
+  // Multi-line safety labels with no actual content (e.g. "User Safety: safe\nResponse Safety: safe")
+  if (/^(user safety|response safety|safety|safe)\s*[:.]?\s*(safe|ok|done|yes|no)?(\n+(user safety|response safety|safety|safe)\s*[:.]?\s*(safe|ok|done|yes|no)?)*$/i.test(text)) return true;
   // Responses that are only a label with no actual content.
   if (/^[a-z\s:]{1,25}$/i.test(text) && !/[.!?।؟]/.test(text)) return true;
   return false;
