@@ -94,6 +94,8 @@ export default function ChatPage() {
   const sttRef = useRef<STTController | null>(null);
   const ttsRef = useRef<ReturnType<typeof createSpeaker> | null>(null);
   const conversationModeRef = useRef(false);
+  const sendMessageRef = useRef<() => void>(() => {});
+  const startListeningRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   // Load threads.
   const loadThreads = useCallback(async () => {
@@ -174,6 +176,7 @@ export default function ChatPage() {
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
+
 
   const sendMessage = async () => {
     if ((!input.trim() && attachments.length === 0) || sending) return;
@@ -441,7 +444,7 @@ export default function ChatPage() {
         clearInterval(check);
         // Conversation mode: resume listening after the reply finishes speaking.
         if (conversationModeRef.current) {
-          setTimeout(() => startListening(), 400);
+          setTimeout(() => startListeningRef.current(), 400);
         }
       }
     }, 300);
@@ -451,6 +454,7 @@ export default function ChatPage() {
     ttsRef.current?.stop();
     setSpeaking(false);
   };
+
 
   const startListening = useCallback(async () => {
     logVoiceDiagnostics();
@@ -487,14 +491,14 @@ export default function ChatPage() {
           if (cleaned) {
             setInput(cleaned);
             if (voiceSettings.autoSend || conversationModeRef.current) {
-              setTimeout(() => sendMessage(), 100);
+              setTimeout(() => sendMessageRef.current(), 100);
             }
           }
           return;
         }
         setInput((prev) => (prev ? prev + " " : "") + text);
         if (voiceSettings.autoSend || conversationModeRef.current) {
-          setTimeout(() => sendMessage(), 100);
+          setTimeout(() => sendMessageRef.current(), 100);
         }
       },
       onError: (msg) => { setError(msg); setListening(false); setConversationMode(false); conversationModeRef.current = false; },
@@ -534,9 +538,10 @@ export default function ChatPage() {
     startListening();
   };
 
-
-
-
+  // Keep refs in sync with latest closures so async callbacks (setTimeout)
+  // inside startListening and speak always call the current version.
+  sendMessageRef.current = sendMessage;
+  startListeningRef.current = startListening;
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden max-w-[100vw]">
