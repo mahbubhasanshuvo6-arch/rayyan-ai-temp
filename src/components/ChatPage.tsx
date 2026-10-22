@@ -206,12 +206,18 @@ export default function ChatPage() {
       loadThreads();
     }
 
+    // Build display text that includes attachment names for the chat bubble.
+    const attachmentNames = attachments.map((a) => a.name);
+    const displayUserText = attachmentNames.length > 0
+      ? (userText ? userText + "\n" : "") + attachmentNames.map((n) => `[📎 ${n}]`).join("\n")
+      : userText;
+
     // Save user message.
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       thread_id: thread.id,
       role: "user",
-      content: userText,
+      content: displayUserText,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -263,6 +269,14 @@ export default function ChatPage() {
             scope.scope || scope.target || scope.relationship
               ? scope
               : undefined,
+          attachments: attachments.length > 0
+            ? attachments.map((a) => ({
+                name: a.name,
+                type: a.type,
+                isImage: a.isImage,
+                dataUrl: a.dataUrl,
+              }))
+            : undefined,
         }),
       });
       const data = await res.json();
@@ -340,6 +354,7 @@ export default function ChatPage() {
       setError(e instanceof Error ? e.message : "নেটওয়ার্ক ত্রুটি। অনুগ্রহ করে আবার চেষ্টা করুন।");
     } finally {
       setSending(false);
+      setAttachments([]);
     }
   };
 
@@ -739,11 +754,93 @@ export default function ChatPage() {
             )}
 
             {conversationMode && (
-              <div className="mb-2 flex items-center justify-between bg-cyan-950/30 border border-cyan-900 rounded-lg px-3 py-2">
-                <span className="text-xs text-cyan-300">কনভার্সেশন মোড চালু — কথা বললে স্বয়ংক্রিয়ভাবে পাঠানো হবে এবং উত্তর শোনানো হবে।</span>
-                <button onClick={toggleConversationMode} className="text-cyan-400 hover:text-white text-xs underline">বন্ধ</button>
+              <div className="mb-2 flex items-center justify-between gap-2 bg-cyan-950/30 border border-cyan-900 rounded-lg px-3 py-2">
+                <span className="text-xs text-cyan-300 flex items-center gap-1.5 min-w-0">
+                  {speaking ? <span className="flex items-center gap-1.5 shrink-0"><Volume2 className="w-3.5 h-3.5 animate-pulse" /> বলছি...</span>
+                    : listening ? <span className="flex items-center gap-1.5 shrink-0"><Mic className="w-3.5 h-3.5 animate-pulse" /> শুনছি...</span>
+                    : sending ? <span className="flex items-center gap-1.5 shrink-0"><Loader2 className="w-3.5 h-3.5 animate-spin" /> ভাবছি...</span>
+                    : <span className="flex items-center gap-1.5 shrink-0"><AudioLines className="w-3.5 h-3.5" /> কথা বলুন</span>}
+                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => { stopSpeaking(); }}
+                    disabled={!speaking}
+                    className="p-1.5 rounded-md text-cyan-300 hover:text-white hover:bg-cyan-900/50 disabled:opacity-30 transition"
+                    title="উত্তর থামান"
+                    aria-label="Stop speaking"
+                  >
+                    <Square className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={toggleConversationMode}
+                    className="px-2.5 py-1 rounded-md bg-rose-700 hover:bg-rose-600 text-white text-xs transition"
+                    title="কনভার্সেশন মোড বন্ধ"
+                    aria-label="End conversation mode"
+                  >
+                    End
+                  </button>
+                </div>
               </div>
             )}
+
+            {/* Attachment previews */}
+            {(attachments.length > 0 || attachmentError || attachmentLoading) && (
+              <div className="mb-2 flex flex-wrap gap-2 items-center">
+                {attachmentLoading && (
+                  <div className="flex items-center gap-1.5 text-xs text-slate-400 px-2 py-1.5 bg-slate-800 rounded-lg">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> ফাইল পড়া হচ্ছে...
+                  </div>
+                )}
+                {attachments.map((att) => (
+                  <div key={att.id} className="relative flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg pl-1.5 pr-6 py-1.5 max-w-[180px]">
+                    {att.isImage ? (
+                      <img src={att.dataUrl} alt={att.name} className="w-8 h-8 rounded object-cover shrink-0" />
+                    ) : (
+                      <FileText className="w-5 h-5 text-slate-400 shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-xs text-slate-200 truncate max-w-[100px]">{att.name}</p>
+                      <p className="text-[10px] text-slate-500">{formatFileSize(att.size)}</p>
+                    </div>
+                    <button
+                      onClick={() => removeAttachment(att.id)}
+                      className="absolute top-0.5 right-0.5 text-slate-500 hover:text-rose-400 transition"
+                      title="সরান"
+                      aria-label={`Remove ${att.name}`}
+                    >
+                      <XCircle className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                {attachmentError && (
+                  <p className="text-xs text-rose-300 px-2 py-1 bg-rose-950/50 border border-rose-800 rounded-lg flex items-center gap-1.5 max-w-full">
+                    <XCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{attachmentError}</span>
+                    <button onClick={() => setAttachmentError(null)} className="text-rose-400 hover:text-white shrink-0 ml-1">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Hidden file inputs */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,text/*,.txt,.md,.csv,.json,.xml,.html,.js,.ts,.py,.java"
+              multiple
+              className="hidden"
+              onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
+            />
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
+            />
 
             {/* Pill-shaped input container */}
             <div className="relative">
@@ -751,43 +848,61 @@ export default function ChatPage() {
                 {/* Left: Plus button with dropdown menu */}
                 <div className="relative shrink-0">
                   <button
-                    onClick={() => setShowPlusMenu((v) => !v)}
-                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0"
-                    title="More options"
+                    onClick={() => { setShowPlusMenu((v) => !v); setAttachmentError(null); }}
+                    className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition shrink-0 ${
+                      showPlusMenu || attachments.length > 0
+                        ? accent.bg + " text-white"
+                        : "bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white"
+                    }`}
+                    title="ফাইল যুক্ত করুন"
+                    aria-label="Attach files"
+                    aria-expanded={showPlusMenu}
                   >
-                    <Plus className="w-5 h-5" />
+                    <Plus className={`w-5 h-5 transition-transform ${showPlusMenu ? "rotate-45" : ""}`} />
                   </button>
                   {showPlusMenu && (
-                    <div className="absolute bottom-12 left-0 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50">
-                      <button
-                        onClick={() => { navigate("documents"); setShowPlusMenu(false); }}
-                        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
-                      >
-                        <BookOpen className="w-4 h-4 text-slate-400" /> Upload Document
-                      </button>
-                      <button
-                        onClick={() => { navigate("builder"); setShowPlusMenu(false); }}
-                        className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
-                      >
-                        <Sparkles className="w-4 h-4 text-slate-400" /> App Builder
-                      </button>
-                      {settings.cybersec_enabled && settings.cybersec_authorization_required && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setShowPlusMenu(false)} />
+                      <div className="absolute bottom-12 left-0 w-60 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50">
                         <button
-                          onClick={() => { setShowScope(true); setShowPlusMenu(false); }}
+                          onClick={() => { fileInputRef.current?.click(); }}
                           className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                          aria-label="Upload from gallery"
                         >
-                          <ShieldCheck className="w-4 h-4 text-slate-400" /> Testing Scope
+                          <ImageIcon className="w-4 h-4 text-slate-400" /> ছবি / ফাইল আপলোড
                         </button>
-                      )}
-                      {settings.voice_enabled && (
                         <button
-                          onClick={() => { toggleConversationMode(); setShowPlusMenu(false); }}
+                          onClick={() => { cameraInputRef.current?.click(); }}
                           className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                          aria-label="Take a photo"
                         >
-                          <Sparkles className={`w-4 h-4 ${conversationMode ? "text-cyan-400" : "text-slate-400"}`} /> Conversation Mode
+                          <Camera className="w-4 h-4 text-slate-400" /> ক্যামেরা দিয়ে ছবি
                         </button>
-                      )}
-                    </div>
+                        <div className="border-t border-slate-700 my-1" />
+                        <button
+                          onClick={() => { navigate("documents"); setShowPlusMenu(false); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                          aria-label="Upload document"
+                        >
+                          <BookOpen className="w-4 h-4 text-slate-400" /> ডকুমেন্ট পেজ
+                        </button>
+                        <button
+                          onClick={() => { navigate("builder"); setShowPlusMenu(false); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                          aria-label="App builder"
+                        >
+                          <Sparkles className="w-4 h-4 text-slate-400" /> অ্যাপ বিল্ডার
+                        </button>
+                        {settings.cybersec_enabled && settings.cybersec_authorization_required && (
+                          <button
+                            onClick={() => { setShowScope(true); setShowPlusMenu(false); }}
+                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                          >
+                            <ShieldCheck className="w-4 h-4 text-slate-400" /> টেস্টিং স্কোপ
+                          </button>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
 
@@ -805,6 +920,7 @@ export default function ChatPage() {
                   rows={1}
                   className="flex-1 min-w-0 bg-transparent text-slate-100 placeholder:text-slate-500 px-1 sm:px-2 py-2 text-sm sm:text-[15px] resize-none outline-none max-h-32 leading-relaxed"
                   style={{ minHeight: "24px" }}
+                  aria-label="Message input"
                 />
 
                 {/* Right: Mic + Send/Voice buttons */}
@@ -818,26 +934,31 @@ export default function ChatPage() {
                           : "text-slate-400 hover:text-white hover:bg-slate-700"
                       }`}
                       title={listening ? "ভয়েস বন্ধ করুন" : "ভয়েস ইনপুট"}
+                      aria-label={listening ? "Stop voice input" : "Start voice input"}
+                      aria-pressed={listening}
                     >
                       {listening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
                     </button>
                   )}
 
-                  {/* Send button (when text) / Blue voice button (when empty) */}
-                  {input.trim() ? (
+                  {/* Send button (when text or attachments) / Blue voice button (when empty) */}
+                  {(input.trim() || attachments.length > 0) ? (
                     <button
                       onClick={sendMessage}
                       disabled={sending}
                       className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full ${accent.bg} text-white disabled:opacity-40 flex items-center justify-center transition shrink-0 hover:opacity-90`}
                       title="পাঠান"
+                      aria-label="Send message"
                     >
                       <ArrowUp className="w-5 h-5" />
                     </button>
                   ) : settings.voice_enabled ? (
                     <button
-                      onClick={toggleListening}
+                      onClick={toggleConversationMode}
                       className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full ${accent.bg} text-white flex items-center justify-center transition shrink-0 hover:opacity-90`}
-                      title="ভয়েস ইনপুট"
+                      title="ভয়েস কনভার্সেশন শুরু করুন"
+                      aria-label="Start voice conversation"
+                      aria-pressed={conversationMode}
                     >
                       <AudioLines className="w-5 h-5" />
                     </button>
@@ -845,8 +966,9 @@ export default function ChatPage() {
                     <button
                       onClick={sendMessage}
                       disabled={sending}
-                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full ${accent.bg} text-white disabled:opacity-40 flex items-center justify-center transition shrink-0`}
+                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full ${accent.bg} text-white disabled:opacity-40 flex items-center justify-center transition shrink-0 hover:opacity-90`}
                       title="পাঠান"
+                      aria-label="Send message"
                     >
                       <ArrowUp className="w-5 h-5" />
                     </button>
