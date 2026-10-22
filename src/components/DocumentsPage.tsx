@@ -25,12 +25,57 @@ export default function DocumentsPage() {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setAuthUserId(data.session?.user?.id ?? null);
     });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setAuthUserId(sess?.user?.id ?? null);
+    });
+    return () => sub.subscription.unsubscribe();
   }, []);
+
+  const handleAuth = async () => {
+    setAuthError(null);
+    setAuthLoading(true);
+    try {
+      if (authMode === "signin") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) setAuthError(error.message);
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) {
+          setAuthError(error.message);
+        } else {
+          setAuthError(null);
+          setAuthMode("signin");
+          setAuthEmail("");
+          setAuthPassword("");
+          // Auto-sign-in after signup (email confirmation is off)
+          const { error: signInError } = await supabase.auth.signInWithPassword({
+            email: authEmail,
+            password: authPassword,
+          });
+          if (signInError) setAuthError(signInError.message);
+        }
+      }
+    } catch {
+      setAuthError("Authentication failed. Please try again.");
+    }
+    setAuthLoading(false);
+  };
 
   const load = useCallback(async () => {
     if (!authUserId) { setLoading(false); return; }
@@ -179,20 +224,49 @@ export default function DocumentsPage() {
       <div className="max-w-4xl mx-auto p-4 lg:p-6 space-y-6">
         {/* Auth gate */}
         {!authUserId ? (
-          <div className="text-center py-20">
+          <div className="max-w-sm mx-auto py-12">
             <div className="w-16 h-16 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto mb-4">
               <LogIn className="w-8 h-8 text-slate-400" />
             </div>
-            <p className="text-slate-300 font-medium mb-2">Sign in required</p>
-            <p className="text-sm text-slate-500 mb-6">
-              You need to be signed in to upload and manage your documents.
+            <p className="text-slate-300 font-medium mb-1 text-center">Sign in required</p>
+            <p className="text-sm text-slate-500 mb-6 text-center">
+              Sign in to upload and manage your documents.
             </p>
-            <button
-              onClick={() => navigate("chat")}
-              className="px-5 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500"
-            >
-              Go to Chat to Sign In
-            </button>
+            {authError && (
+              <div className="bg-rose-950/50 border border-rose-800 text-rose-200 rounded-lg px-3 py-2 text-sm mb-4">
+                {authError}
+              </div>
+            )}
+            <div className="space-y-3">
+              <input
+                type="email"
+                placeholder="Email"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                className="w-full rounded-lg bg-slate-800 border border-slate-700 px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleAuth(); }}
+                className="w-full rounded-lg bg-slate-800 border border-slate-700 px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+              />
+              <button
+                onClick={handleAuth}
+                disabled={authLoading || !authEmail || !authPassword}
+                className="w-full rounded-lg bg-blue-600 text-white text-sm font-medium py-2.5 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                {authLoading ? "Please wait..." : authMode === "signin" ? "Sign In" : "Create Account"}
+              </button>
+              <button
+                onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthError(null); }}
+                className="w-full text-xs text-slate-500 hover:text-slate-300 transition"
+              >
+                {authMode === "signin" ? "Need an account? Sign up" : "Already have an account? Sign in"}
+              </button>
+            </div>
           </div>
         ) : (
           <>
