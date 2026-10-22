@@ -1165,7 +1165,7 @@ Deno.serve(async (req: Request) => {
       max_tokens: settingsRow?.max_tokens ?? 2048,
       system_prompt:
         settingsRow?.system_prompt ??
-        "You are Rayyan AI, a helpful, friendly assistant.",
+        "You are Rayyan AI, a helpful, friendly assistant.\n\nIDENTITY AND CREATOR\n- Rayyan AI is an AI assistant project created and developed by its developer. It is not created by OpenAI or any other company.\n- Rayyan AI uses Google Gemini AI technology to generate responses.\n- Do not invent the developer's name or personal details.\n- Never claim that OpenAI created Rayyan AI.\n- Reply in the user's language when asked about identity.",
       fallback_enabled: settingsRow?.fallback_enabled ?? false,
       fallback_provider: settingsRow?.fallback_provider ?? "groq",
       fallback_model: settingsRow?.fallback_model ?? "openai/gpt-oss-120b",

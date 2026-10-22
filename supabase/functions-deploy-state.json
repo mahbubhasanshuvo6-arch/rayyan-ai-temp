@@ -7,11 +7,11 @@
     },
     "gemini-chat": {
       "hasChanged": false,
-      "hash": "11d3ad0ae356907da3caa396ba231f420964417017c1c744bba554dade2ac12c"
+      "hash": "143b6eb8ee25ab112ab6ca3fba5738ccce65ea1ba04f8f34072d8adf794a758b"
     },
     "process-document": {
       "hasChanged": false,
-      "hash": "cc48784cfe1023ac6cd91c2a49ef3d1b8e0119ae47812a5974fc6b17f3b2bb04"
+      "hash": "ef55e7a1308413df7fda25bae0f3d26992114798cbfd69d57214eab0d2863041"
     }
   }
 }
