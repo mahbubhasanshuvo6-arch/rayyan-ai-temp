@@ -12,6 +12,7 @@ import {
 import {
   loadVoiceSettings, createRecognizer, createSpeaker,
   isSTTSupported, isTTSSupported, requestMicPermission, isInIframe, logVoiceDiagnostics,
+  setBargeInMode,
   type VoiceSettings, type STTController,
 } from "@/lib/voice";
 import { loadWakeWordSettings, detectWakeWord, type WakeWordSettings } from "@/lib/wakeWord";
@@ -100,6 +101,8 @@ export default function ChatPage() {
   const conversationModeRef = useRef(false);
   const sendMessageRef = useRef<() => void>(() => {});
   const startListeningRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const bargeInWatcherRef = useRef<STTController | null>(null);
+  const bargeInProgressRef = useRef(false);
 
   // Load threads.
   const loadThreads = useCallback(async () => {
@@ -508,16 +511,57 @@ export default function ChatPage() {
     if (!ttsRef.current) return;
     setSpeaking(true);
     ttsRef.current.speak(text);
+
+    // Barge-in watcher: in conversation mode, start listening while TTS plays.
+    // If the user speaks, we detect it via interim results and stop TTS.
+    // This relies on the device's echo cancellation to ignore the TTS audio.
+    // On devices where echo cancellation fails, the watcher may fire on TTS echo —
+    // the bargeInInProgress guard prevents the echo from being processed as user input.
+    if (conversationModeRef.current && isSTTSupported()) {
+      bargeInProgressRef.current = false;
+      setBargeInMode(true);
+      const watcher = createRecognizer(voiceSettings.sttLang, {
+        onResult: () => {},
+        onError: () => {},
+        onEnd: () => {},
+        onBargeIn: () => {
+          if (bargeInProgressRef.current) return;
+          bargeInProgressRef.current = true;
+          // Stop TTS immediately.
+          ttsRef.current?.stop();
+          setSpeaking(false);
+          // Stop the barge-in watcher.
+          bargeInWatcherRef.current?.stop();
+          bargeInWatcherRef.current = null;
+          setBargeInMode(false);
+          // Start normal listening to capture the user's actual speech.
+          setTimeout(() => startListeningRef.current(), 200);
+        },
+      });
+      if (watcher) {
+        bargeInWatcherRef.current = watcher;
+        watcher.start();
+      }
+    }
+
     // Poll for end since onend is unreliable on some Android WebViews.
     const synth = window.speechSynthesis;
     const check = setInterval(() => {
       if (!synth.speaking) {
         setSpeaking(false);
         clearInterval(check);
+        // Clean up barge-in watcher if it's still running (TTS finished naturally).
+        if (bargeInWatcherRef.current) {
+          bargeInWatcherRef.current.stop();
+          bargeInWatcherRef.current = null;
+          setBargeInMode(false);
+        }
         // Conversation mode: resume listening after the reply finishes speaking.
-        if (conversationModeRef.current) {
+        // Skip if barge-in already triggered listening.
+        if (conversationModeRef.current && !bargeInProgressRef.current) {
           setTimeout(() => startListeningRef.current(), 400);
         }
+        bargeInProgressRef.current = false;
       }
     }, 300);
   };
@@ -525,6 +569,13 @@ export default function ChatPage() {
   const stopSpeaking = () => {
     ttsRef.current?.stop();
     setSpeaking(false);
+    // Clean up barge-in watcher if active.
+    if (bargeInWatcherRef.current) {
+      bargeInWatcherRef.current.stop();
+      bargeInWatcherRef.current = null;
+      setBargeInMode(false);
+    }
+    bargeInProgressRef.current = false;
   };
 
 

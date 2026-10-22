@@ -145,6 +145,15 @@ export interface STTHandlers {
   onResult: (text: string, isFinal: boolean) => void;
   onError: (message: string) => void;
   onEnd: () => void;
+  onBargeIn?: () => void;
+}
+
+// When true, interim results are treated as barge-in signals (user voice detected
+// while TTS is speaking). The recognizer is created in this mode during TTS playback.
+let bargeInMode = false;
+
+export function setBargeInMode(enabled: boolean): void {
+  bargeInMode = enabled;
 }
 
 export interface STTController {
@@ -160,6 +169,10 @@ export function createRecognizer(lang: string, handlers: STTHandlers): STTContro
   rec.lang = lang || "bn-BD";
   rec.continuous = true;
   rec.interimResults = true;
+
+  // Track what text was being spoken by TTS so we can filter out echo.
+  let bargeInFired = false;
+
   rec.onresult = (e: any) => {
     let interim = "";
     let finalText = "";
@@ -168,11 +181,30 @@ export function createRecognizer(lang: string, handlers: STTHandlers): STTContro
       if (e.results[i].isFinal) finalText += transcript;
       else interim += transcript;
     }
+
+    // Barge-in mode: we're listening WHILE TTS is speaking.
+    // If we get any speech result, fire the barge-in callback once.
+    // The caller will stop TTS and decide whether to process this as user input.
+    if (bargeInMode && !bargeInFired && (interim || finalText)) {
+      bargeInFired = true;
+      handlers.onBargeIn?.();
+      // Don't process the text yet — the caller will restart recognition
+      // in normal mode after stopping TTS. This prevents TTS echo from
+      // being treated as user input.
+      return;
+    }
+
+    // In barge-in mode, ignore results until the caller switches to normal mode.
+    if (bargeInMode) return;
+
     if (finalText) handlers.onResult(finalText.trim(), true);
     else if (interim) handlers.onResult(interim.trim(), false);
   };
   rec.onerror = (e: any) => {
     console.warn("[Rayyan] SpeechRecognition error:", e.error, e.message);
+    // In barge-in mode, suppress error messages — these are expected
+    // (no-speech, aborted) since we're listening during TTS playback.
+    if (bargeInMode) return;
     const msgs: Record<string, string> = {
       "no-speech": "কোনো কথা শোনা যায়নি। অনুগ্রহ করে আবার বলুন।",
       "audio-capture": "মাইক্রোফোন অ্যাক্সেস ব্যর্থ। মাইক্রোফোন অনুমতি দিন।",
@@ -185,9 +217,13 @@ export function createRecognizer(lang: string, handlers: STTHandlers): STTContro
     };
     handlers.onError(msgs[e.error] ?? `ভয়েস ত্রুটি: ${e.error}`);
   };
-  rec.onend = () => handlers.onEnd();
+  rec.onend = () => {
+    // In barge-in mode, don't fire onEnd — the caller manages the lifecycle.
+    if (!bargeInMode) handlers.onEnd();
+  };
   return {
     start: () => {
+      bargeInFired = false;
       try { rec.start(); } catch { /* already started */ }
     },
     stop: () => {
