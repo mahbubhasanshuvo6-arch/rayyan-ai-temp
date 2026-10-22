@@ -208,19 +208,17 @@ function scanScientificClaims(text: string): { corrected: boolean; text: string 
 function friendlyError(status: number, errMsg: string, fallbackAttempted: boolean): string {
   if (status === 429 || /rate|quota|resource exhausted/i.test(errMsg)) {
     return fallbackAttempted
-      ? "All AI providers are currently busy or rate-limited. Please try again in a minute."
-      : "The AI service is rate-limited right now. Please try again shortly.";
+      ? "সবগুলো AI প্রোভাইডার এই মুহূর্তে রেট-লিমিটে আছে। Gemini এর ফ্রি কোটা শেষ হয়ে গেছে (কিছুক্ষণ পরে রিসেট হবে) এবং Groq-এর দৈনিক টোকেন সীমাও প্রায় শেষ। অনুগ্রহ করে ১-২ মিনিট পরে আবার চেষ্টা করুন।"
+      : "AI পরিষেবা এই মুহূর্তে রেট-লিমিটে আছে। অনুগ্রহ করে কিছুক্ষণ পরে আবার চেষ্টা করুন।";
   }
   if (status >= 500) {
     return fallbackAttempted
-      ? "All AI providers are temporarily unavailable. Please try again soon."
-      : "The AI service had a temporary issue. Please try again.";
+      ? "সবগুলো AI প্রোভাইডার সাময়িকভাবে ব্যস্ত। অনুগ্রহ করে কিছুক্ষণ পরে আবার চেষ্টা করুন।"
+      : "AI পরিষেবায় সাময়িক সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।";
   }
-  // Don't echo raw provider error text for 4xx other than known cases — it may
-  // leak key fragments or internal details. Surface a short, safe summary.
   return fallbackAttempted
-    ? "The AI request could not be completed. Please try again."
-    : errMsg.slice(0, 200) || "The AI request could not be completed.";
+    ? "AI অনুরোধ সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।"
+    : errMsg.slice(0, 200) || "AI অনুরোধ সম্পন্ন করা যায়নি।";
 }
 
 interface ChatSettings {
@@ -1584,6 +1582,7 @@ Deno.serve(async (req: Request) => {
         primaryErr &&
         primaryProvider === "groq" &&
         GEMINI_KEY &&
+        Date.now() >= geminiCooldownUntil &&
         isRetryable(primaryErr.status, primaryErr.message)
       ) {
         fallbackAttempted = true;
