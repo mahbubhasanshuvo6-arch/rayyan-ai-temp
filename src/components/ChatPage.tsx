@@ -7,7 +7,7 @@ import {
   Mic, MicOff, Plus, MessageSquare, Trash2,
   Menu, X, Sparkles, Loader2, Volume2, Square, Bot, User, Settings,
   Globe, Brain, Check, X as XIcon, ShieldCheck, BookOpen, Code2, PackageSearch,
-  ExternalLink, ArrowUp, AudioLines, Paperclip, Camera, Image as ImageIcon, FileText, XCircle,
+  ExternalLink, ArrowUp, AudioLines, Camera, Image as ImageIcon, FileText, XCircle,
 } from "lucide-react";
 import {
   loadVoiceSettings, saveVoiceSettings, createRecognizer, createSpeaker,
@@ -18,7 +18,6 @@ import { loadWakeWordSettings, saveWakeWordSettings, detectWakeWord, WAKE_WORD_S
 import { useAuth } from "@/lib/useAuth";
 import {
   type Attachment, createAttachment, validateFile, formatFileSize,
-  isSupportedType, MAX_ATTACHMENTS,
 } from "@/lib/attachments";
 
 const SESSION_LABEL_KEY = "rayyan_owner_label";
@@ -923,8 +922,21 @@ export default function ChatPage() {
                   aria-label="Message input"
                 />
 
-                {/* Right: Mic + Send/Voice buttons */}
+                {/* Right: Lang + Mic + Send/Voice buttons */}
                 <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  {settings.voice_enabled && (
+                    <button
+                      onClick={() => {
+                        const next = voiceSettings.sttLang === "bn-BD" ? "en-US" : "bn-BD";
+                        updateVoiceSettings({ sttLang: next, ttsLang: next });
+                      }}
+                      className="h-9 sm:h-10 px-2 rounded-full text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-700 transition shrink-0"
+                      title={`ভাষা: ${voiceSettings.sttLang === "bn-BD" ? "বাংলা" : "English"}`}
+                      aria-label={`Voice language: ${voiceSettings.sttLang === "bn-BD" ? "Bengali" : "English"}. Click to switch.`}
+                    >
+                      {voiceSettings.sttLang === "bn-BD" ? "বাং" : "EN"}
+                    </button>
+                  )}
                   {settings.voice_enabled && (
                     <button
                       onClick={toggleListening}
