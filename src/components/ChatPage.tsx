@@ -518,6 +518,11 @@ export default function ChatPage() {
     // On devices where echo cancellation fails, the watcher may fire on TTS echo —
     // the bargeInInProgress guard prevents the echo from being processed as user input.
     if (conversationModeRef.current && isSTTSupported()) {
+      // Stop any existing recognizer first — most browsers only allow one
+      // active SpeechRecognition instance at a time.
+      sttRef.current?.stop();
+      sttRef.current = null;
+      setListening(false);
       bargeInProgressRef.current = false;
       setBargeInMode(true);
       const watcher = createRecognizer(voiceSettings.sttLang, {
@@ -631,6 +636,8 @@ export default function ChatPage() {
       },
     });
     if (!stt) return;
+    // Stop any previous recognizer to avoid conflicting instances.
+    sttRef.current?.stop();
     sttRef.current = stt;
     stt.start();
     setListening(true);
