@@ -23,7 +23,7 @@ import {
   isPdfType, isImageType, isTextType, extractFileText,
 } from "@/lib/attachments";
 import type { ChatMessageAttachment } from "@/lib/types";
-import { GraduationCap, Target, Plus as PlusIcon, Code, Trash2 as TrashIcon } from "lucide-react";
+import { GraduationCap, Target, Plus as PlusIcon, Code, Trash2 as TrashIcon, RotateCcw } from "lucide-react";
 
 const SESSION_LABEL_KEY = "rayyan_owner_label";
 
@@ -798,8 +798,14 @@ export default function ChatPage() {
                 </div>
               )}
               {learning.error && (
-                <div className="text-sm text-rose-300 bg-rose-950/50 border border-rose-800 rounded-lg px-3 py-2">
-                  {learning.error}
+                <div className="text-sm text-rose-300 bg-rose-950/50 border border-rose-800 rounded-lg px-3 py-2 space-y-2">
+                  <p>{learning.error}</p>
+                  <button
+                    onClick={() => learning.reload()}
+                    className="flex items-center gap-1.5 text-xs text-rose-200 hover:text-white bg-rose-900/50 hover:bg-rose-800 rounded-md px-2.5 py-1.5 transition"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Retry
+                  </button>
                 </div>
               )}
 

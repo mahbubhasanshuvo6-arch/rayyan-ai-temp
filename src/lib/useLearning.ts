@@ -27,14 +27,28 @@ export function useLearning(ownerLabel: string, isAuthenticated: boolean) {
     setLoading(true);
     setError(null);
     try {
-      const filter = isAuthenticated
-        ? `user_id.is.not.null`
-        : `owner_label.eq.${ownerLabel}`;
+      let goalsQuery = supabase.from("learning_goals").select("*").order("created_at", { ascending: false });
+      let progressQuery = supabase.from("learning_progress").select("*").order("updated_at", { ascending: false });
+      let snippetsQuery = supabase.from("code_snippets").select("*").order("created_at", { ascending: false });
+
+      if (isAuthenticated) {
+        const { data: userData } = await supabase.auth.getUser();
+        const uid = userData.user?.id;
+        if (uid) {
+          goalsQuery = goalsQuery.eq("user_id", uid);
+          progressQuery = progressQuery.eq("user_id", uid);
+          snippetsQuery = snippetsQuery.eq("user_id", uid);
+        }
+      } else {
+        goalsQuery = goalsQuery.eq("owner_label", ownerLabel);
+        progressQuery = progressQuery.eq("owner_label", ownerLabel);
+        snippetsQuery = snippetsQuery.eq("owner_label", ownerLabel);
+      }
 
       const [goalsRes, progressRes, snippetsRes] = await Promise.all([
-        supabase.from("learning_goals").select("*").or(filter).order("created_at", { ascending: false }),
-        supabase.from("learning_progress").select("*").or(filter).order("updated_at", { ascending: false }),
-        supabase.from("code_snippets").select("*").or(filter).order("created_at", { ascending: false }),
+        goalsQuery,
+        progressQuery,
+        snippetsQuery,
       ]);
 
       if (goalsRes.error) throw goalsRes.error;
