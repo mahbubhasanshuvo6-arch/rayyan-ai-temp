@@ -45,7 +45,28 @@ export function isSTTSupported(): boolean {
 
 export type MicPermissionResult =
   | { ok: true }
-  | { ok: false; reason: "denied" | "not-supported" | "insecure-context" | "unknown"; message: string };
+  | { ok: false; reason: "denied" | "not-supported" | "insecure-context" | "iframe-blocked" | "unknown"; message: string };
+
+export function isInIframe(): boolean {
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
+
+export function logVoiceDiagnostics(): void {
+  const diag = {
+    isSecureContext: window.isSecureContext,
+    hasMediaDevices: !!navigator.mediaDevices,
+    hasGetUserMedia: !!navigator.mediaDevices?.getUserMedia,
+    hasSpeechRecognition: !!(window as any).SpeechRecognition,
+    hasWebkitSpeechRecognition: !!(window as any).webkitSpeechRecognition,
+    inIframe: isInIframe(),
+    origin: window.location.origin,
+  };
+  console.warn("[Rayyan Voice Diagnostics]", diag);
+}
 
 export async function requestMicPermission(): Promise<MicPermissionResult> {
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
@@ -67,7 +88,15 @@ export async function requestMicPermission(): Promise<MicPermissionResult> {
     stream.getTracks().forEach((t) => t.stop());
     return { ok: true };
   } catch (e: any) {
+    console.warn("[Rayyan] getUserMedia error:", e?.name, e?.message);
     if (e?.name === "NotAllowedError" || e?.name === "SecurityError") {
+      if (isInIframe()) {
+        return {
+          ok: false,
+          reason: "iframe-blocked",
+          message: "Bolt Preview-এর ভেতরে মাইক্রোফোন ব্যবহার করা যায় না (iframe নিরাপত্তা নীতি)। অনুগ্রহ করে প্রকাশিত HTTPS ওয়েবসাইটে পরীক্ষা করুন।",
+        };
+      }
       return {
         ok: false,
         reason: "denied",
@@ -143,10 +172,13 @@ export function createRecognizer(lang: string, handlers: STTHandlers): STTContro
     else if (interim) handlers.onResult(interim.trim(), false);
   };
   rec.onerror = (e: any) => {
+    console.warn("[Rayyan] SpeechRecognition error:", e.error, e.message);
     const msgs: Record<string, string> = {
       "no-speech": "কোনো কথা শোনা যায়নি। অনুগ্রহ করে আবার বলুন।",
       "audio-capture": "মাইক্রোফোন অ্যাক্সেস ব্যর্থ। মাইক্রোফোন অনুমতি দিন।",
-      "not-allowed": "মাইক্রোফোন অনুমতি প্রয়োজন। ব্রাউজার বা অ্যাপ সেটিংসে অনুমতি দিন।",
+      "not-allowed": isInIframe()
+        ? "Bolt Preview-এর ভেতরে মাইক্রোফোন ব্যবহার করা যায় না। অনুগ্রহ করে প্রকাশিত HTTPS ওয়েবসাইটে পরীক্ষা করুন।"
+        : "মাইক্রোফোন অনুমতি প্রয়োজন। ব্রাউজার বা অ্যাপ সেটিংসে অনুমতি দিন।",
       "network": "নেটওয়ার্ক ত্রুটি। ইন্টারনেট সংযোগ যাচাই করুন।",
       "service-shutdown": "ভয়েস সার্ভিস বন্ধ হয়ে গেছে। আবার চেষ্টা করুন।",
       "aborted": "মাইক্রোফোন ব্যবহার বন্ধ করা হয়েছে।",
