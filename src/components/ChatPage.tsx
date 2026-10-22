@@ -17,8 +17,9 @@ import {
 import { loadWakeWordSettings, detectWakeWord, type WakeWordSettings } from "@/lib/wakeWord";
 import { useAuth } from "@/lib/useAuth";
 import {
-  type Attachment, createAttachment, validateFile, formatFileSize,
+  type Attachment, createAttachment, validateFile, formatFileSize, createThumbnail,
 } from "@/lib/attachments";
+import type { ChatMessageAttachment } from "@/lib/types";
 
 const SESSION_LABEL_KEY = "rayyan_owner_label";
 
@@ -88,6 +89,7 @@ export default function ChatPage() {
   const [attachmentLoading, setAttachmentLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const ownerLabel = getOrCreateOwnerLabel();
   const { session } = useAuth();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -214,12 +216,23 @@ export default function ChatPage() {
       ? (userText ? userText + "\n" : "") + attachmentNames.map((n) => `[📎 ${n}]`).join("\n")
       : userText;
 
+    // Build small thumbnails for history persistence.
+    const historyAttachments: ChatMessageAttachment[] = [];
+    for (const att of attachments) {
+      let thumb: string | null = null;
+      if (att.isImage) {
+        try { thumb = await createThumbnail(att.dataUrl, 80); } catch { thumb = null; }
+      }
+      historyAttachments.push({ name: att.name, type: att.type, isImage: att.isImage, thumb });
+    }
+
     // Save user message.
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       thread_id: thread.id,
       role: "user",
       content: displayUserText,
+      attachments: historyAttachments.length > 0 ? historyAttachments : undefined,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -227,6 +240,7 @@ export default function ChatPage() {
       thread_id: thread.id,
       role: "user",
       content: userText,
+      attachments: historyAttachments.length > 0 ? historyAttachments : null,
     });
 
     // Build history for Gemini.
@@ -329,11 +343,15 @@ export default function ChatPage() {
 
       const reply: string = data.reply ?? "";
       const truncated: boolean = data.truncated === true;
+      const imageDropped: boolean = data.image_dropped === true;
       const sources: Array<{ title: string; url: string }> | undefined =
         Array.isArray(data.sources) ? data.sources : undefined;
-      const displayText = truncated
+      let displayText = truncated
         ? reply + "\n\n---\n\n⚠️ এই উত্তরটি আউটপুট সীমার কারণে সম্পূর্ণ হয়নি। অনুগ্রহ করে আবার জিজ্ঞাসা করুন অথবা আরও নির্দিষ্ট প্রশ্ন করুন।"
         : reply;
+      if (imageDropped) {
+        displayText = "⚠️ আপনার ছবি প্রধান AI মডেল (Gemini) পেয়েছে কিন্তু ফলব্যাক মডেলে পাঠানো সম্ভব হয়নি। ছবি ছাড়া শুধু টেক্সট অংশ নিয়ে উত্তর দেওয়া হলো।\n\n" + displayText;
+      }
       const assistantMsg: ChatMessage = {
         id: crypto.randomUUID(),
         thread_id: thread.id,
@@ -669,6 +687,22 @@ export default function ChatPage() {
                       : "bg-slate-800 text-slate-100"
                   }`}
                 >
+                  {m.attachments && m.attachments.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {m.attachments.map((att, i) => (
+                        <div key={i} className="relative">
+                          {att.isImage && att.thumb ? (
+                            <img src={att.thumb} alt={att.name} className="w-16 h-16 rounded-lg object-cover border border-slate-600" />
+                          ) : (
+                            <div className="flex items-center gap-1.5 bg-slate-600/50 rounded-lg px-2 py-1.5 text-xs text-slate-300">
+                              <FileText className="w-4 h-4 shrink-0" />
+                              <span className="truncate max-w-[80px]">{att.name}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{m.content}</p>
                   {m.role === "assistant" && m.sources && m.sources.length > 0 && (
                     <div className="mt-3 pt-3 border-t border-slate-700/60 space-y-1.5">
@@ -854,6 +888,14 @@ export default function ChatPage() {
               className="hidden"
               onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
             />
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
+            />
 
             {/* Pill-shaped input container */}
             <div className="flex items-end gap-2 bg-slate-800 border border-slate-700 rounded-[28px] px-2.5 sm:px-3 py-2 shadow-lg">
@@ -877,11 +919,18 @@ export default function ChatPage() {
                       <div className="fixed inset-0 z-40" onClick={() => setShowPlusMenu(false)} />
                       <div className="fixed bottom-24 left-3 right-3 sm:absolute sm:bottom-14 sm:left-0 sm:right-auto sm:w-60 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1.5 z-50">
                         <button
+                          onClick={() => { galleryInputRef.current?.click(); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
+                          aria-label="Pick images from gallery"
+                        >
+                          <ImageIcon className="w-4 h-4 text-slate-400" /> গ্যালারি থেকে ছবি
+                        </button>
+                        <button
                           onClick={() => { fileInputRef.current?.click(); }}
                           className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition"
-                          aria-label="Upload from gallery"
+                          aria-label="Upload file"
                         >
-                          <ImageIcon className="w-4 h-4 text-slate-400" /> ছবি / ফাইল আপলোড
+                          <FileText className="w-4 h-4 text-slate-400" /> ফাইল আপলোড
                         </button>
                         <button
                           onClick={() => { cameraInputRef.current?.click(); }}

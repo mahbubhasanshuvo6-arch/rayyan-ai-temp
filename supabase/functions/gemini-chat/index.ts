@@ -2004,12 +2004,17 @@ Deno.serve(async (req: Request) => {
       if (scanResult.corrected) {
         replyText = scanResult.text;
       }
+      // If images were attached but the responding provider is not Gemini
+      // (Groq/OpenRouter don't support inline images), flag it so the frontend
+      // can warn the user that the image was not analyzed.
+      const imageDropped = imageAttachments.length > 0 && result.provider !== "gemini";
       return json({
         reply: replyText,
         provider: result.provider,
         model: result.model,
         truncated: stillTruncated,
         scientific_claim_corrected: scanResult.corrected,
+        image_dropped: imageDropped,
         usage: { pt: result.pt, ct: result.ct, total: result.total, cost: estimateCost(result.model, result.pt, result.ct) },
       });
     }

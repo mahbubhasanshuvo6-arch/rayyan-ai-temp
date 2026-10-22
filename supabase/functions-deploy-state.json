@@ -1,0 +1,17 @@
+{
+  "projectId": "72130885",
+  "functions": {
+    "admin-api": {
+      "hasChanged": false,
+      "hash": "f214cf9dea6acf9af87ea76eb99bef7ce76f66fd9c80f663b64e00b63897b823"
+    },
+    "gemini-chat": {
+      "hasChanged": false,
+      "hash": "21cb846c9fdb4af6c9ad36746a328e6c67cbb15b5422b7ddb3d24f1204a51bac"
+    },
+    "process-document": {
+      "hasChanged": false,
+      "hash": "655deaabc00493d7ed113a6e856eaf24ef039e8ab3b7355654bab07bc81d8c0a"
+    }
+  }
+}

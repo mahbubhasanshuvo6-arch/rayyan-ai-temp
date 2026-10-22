@@ -119,3 +119,30 @@ export async function attachmentToTextContent(att: Attachment): Promise<string> 
   const truncated = text.length > 50000 ? text.slice(0, 50000) + "\n\n[... truncated ...]" : text;
   return `[Attached file: ${att.name}]\n\n${truncated}`;
 }
+
+// Create a small thumbnail data URL from an image attachment for chat history.
+// Resizes to maxDim x maxDim maintaining aspect ratio, outputs as JPEG.
+export async function createThumbnail(dataUrl: string, maxDim = 80): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > height) {
+        height = Math.round((height / width) * maxDim);
+        width = maxDim;
+      } else {
+        width = Math.round((width / height) * maxDim);
+        height = maxDim;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(dataUrl); return; }
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", 0.7));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}

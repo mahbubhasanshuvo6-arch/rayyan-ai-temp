@@ -34,12 +34,20 @@ export interface ChatThread {
   updated_at: string;
 }
 
+export interface ChatMessageAttachment {
+  name: string;
+  type: string;
+  isImage: boolean;
+  thumb: string | null;
+}
+
 export interface ChatMessage {
   id: string;
   thread_id: string;
   role: "user" | "assistant" | "system";
   content: string;
   sources?: Array<{ title: string; url: string }> | null;
+  attachments?: ChatMessageAttachment[] | null;
   created_at: string;
 }
 
