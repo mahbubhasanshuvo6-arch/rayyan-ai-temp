@@ -871,8 +871,13 @@ export default function ChatPage() {
             )}
 
             {/* Attachment previews */}
-            {(attachments.length > 0 || attachmentError || attachmentLoading) && (
+            {(attachments.length > 0 || attachmentError || attachmentLoading || docProcessing) && (
               <div className="mb-2 flex flex-wrap gap-2 items-center">
+                {docProcessing && (
+                  <div className="flex items-center gap-1.5 text-xs text-slate-400 px-2 py-1.5 bg-slate-800 rounded-lg">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> ডকুমেন্ট প্রসেস হচ্ছে...
+                  </div>
+                )}
                 {attachmentLoading && (
                   <div className="flex items-center gap-1.5 text-xs text-slate-400 px-2 py-1.5 bg-slate-800 rounded-lg">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" /> ফাইল পড়া হচ্ছে...
