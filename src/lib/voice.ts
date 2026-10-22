@@ -43,6 +43,59 @@ export function isSTTSupported(): boolean {
   );
 }
 
+export type MicPermissionResult =
+  | { ok: true }
+  | { ok: false; reason: "denied" | "not-supported" | "insecure-context" | "unknown"; message: string };
+
+export async function requestMicPermission(): Promise<MicPermissionResult> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+    if (typeof window !== "undefined" && window.isSecureContext === false) {
+      return {
+        ok: false,
+        reason: "insecure-context",
+        message: "মাইক্রোফোন ব্যবহারের জন্য HTTPS সংযোগ প্রয়োজন। অনুগ্রহ করে HTTPS লিংক ব্যবহার করুন।",
+      };
+    }
+    return {
+      ok: false,
+      reason: "not-supported",
+      message: "এই ব্রাউজারে মাইক্রোফোন অনুমতি যাচাই করা যাচ্ছে না।",
+    };
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((t) => t.stop());
+    return { ok: true };
+  } catch (e: any) {
+    if (e?.name === "NotAllowedError" || e?.name === "SecurityError") {
+      return {
+        ok: false,
+        reason: "denied",
+        message: "মাইক্রোফোন অনুমতি প্রয়োজন। ব্রাউজার বা অ্যাপ সেটিংসে মাইক্রোফোন অনুমতি দিন।",
+      };
+    }
+    if (e?.name === "NotFoundError" || e?.name === "DevicesNotFoundError") {
+      return {
+        ok: false,
+        reason: "not-supported",
+        message: "কোনো মাইক্রোফোন পাওয়া যায়নি। ডিভাইসে মাইক্রোফোন আছে কিনা যাচাই করুন।",
+      };
+    }
+    if (e?.name === "NotReadableError" || e?.name === "TrackStartError") {
+      return {
+        ok: false,
+        reason: "unknown",
+        message: "মাইক্রোফোন অ্যাক্সেস ব্যর্থ। অন্য অ্যাপ মাইক্রোফোন ব্যবহার করছে কিনা যাচাই করুন।",
+      };
+    }
+    return {
+      ok: false,
+      reason: "unknown",
+      message: `মাইক্রোফোন অনুমতি যাচাই ব্যর্থ: ${e?.name ?? e?.message ?? "অজানা ত্রুটি"}`,
+    };
+  }
+}
+
 export function isTTSSupported(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
@@ -93,8 +146,10 @@ export function createRecognizer(lang: string, handlers: STTHandlers): STTContro
     const msgs: Record<string, string> = {
       "no-speech": "কোনো কথা শোনা যায়নি। অনুগ্রহ করে আবার বলুন।",
       "audio-capture": "মাইক্রোফোন অ্যাক্সেস ব্যর্থ। মাইক্রোফোন অনুমতি দিন।",
-      "not-allowed": "মাইক্রোফোন অনুমতি প্রয়োজন। অ্যাপ সেটিংসে অনুমতি দিন।",
+      "not-allowed": "মাইক্রোফোন অনুমতি প্রয়োজন। ব্রাউজার বা অ্যাপ সেটিংসে অনুমতি দিন।",
       "network": "নেটওয়ার্ক ত্রুটি। ইন্টারনেট সংযোগ যাচাই করুন।",
+      "service-shutdown": "ভয়েস সার্ভিস বন্ধ হয়ে গেছে। আবার চেষ্টা করুন।",
+      "aborted": "মাইক্রোফোন ব্যবহার বন্ধ করা হয়েছে।",
     };
     handlers.onError(msgs[e.error] ?? `ভয়েস ত্রুটি: ${e.error}`);
   };

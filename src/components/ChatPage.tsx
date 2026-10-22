@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import {
   loadVoiceSettings, createRecognizer, createSpeaker,
-  isSTTSupported, isTTSSupported,
+  isSTTSupported, isTTSSupported, requestMicPermission,
   type VoiceSettings, type STTController,
 } from "@/lib/voice";
 import { loadWakeWordSettings, detectWakeWord, type WakeWordSettings } from "@/lib/wakeWord";
@@ -452,12 +452,25 @@ export default function ChatPage() {
     setSpeaking(false);
   };
 
-  const startListening = useCallback(() => {
+  const startListening = useCallback(async () => {
     if (!isSTTSupported()) {
       setError("এই ডিভাইসে ভয়েস ইনপুট সমর্থিত নয়।");
       return;
     }
     setError(null);
+    // Explicitly request microphone permission via getUserMedia before starting
+    // SpeechRecognition. On Android Chrome, the browser may have the mic permission
+    // in App Info but SpeechRecognition still fires 'not-allowed' without an
+    // explicit getUserMedia consent prompt. This also lets us show precise
+    // Bengali error messages for each failure case.
+    const perm = await requestMicPermission();
+    if (!perm.ok) {
+      setError(perm.message);
+      setListening(false);
+      setConversationMode(false);
+      conversationModeRef.current = false;
+      return;
+    }
     const stt = createRecognizer(voiceSettings.sttLang, {
       onResult: (text, isFinal) => {
         if (!isFinal) {
