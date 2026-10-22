@@ -1007,8 +1007,8 @@ async function retrieveKnowledge(
       }));
       return formatKnowledgeSnippet(entries);
     }
-  } catch {
-    // RPC not available or failed — fall through to ILIKE strategy.
+  } catch (e) {
+    console.warn("search_knowledge_trgm RPC failed:", e instanceof Error ? e.message : String(e));
   }
 
   // Strategy 2: ILIKE fallback — exact substring match on title/content.
@@ -1250,8 +1250,8 @@ Deno.serve(async (req: Request) => {
           if (knowledgeSnippet) {
             effectiveSystem += knowledgeSnippet;
           }
-        } catch {
-          // Knowledge retrieval failed — proceed without it (safe fallback).
+        } catch (e) {
+          console.warn("Knowledge retrieval failed:", e instanceof Error ? e.message : String(e));
         }
       }
 
