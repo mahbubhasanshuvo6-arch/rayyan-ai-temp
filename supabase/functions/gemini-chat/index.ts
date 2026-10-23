@@ -46,6 +46,7 @@ let geminiCooldownUntil = 0;
 let groqCooldownUntil = 0;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
 // Rough per-1K-token USD costs (free tier = 0, tracked for when paid).
 const COST_TABLE: Record<string, { input: number; output: number }> = {
@@ -1190,18 +1191,29 @@ Deno.serve(async (req: Request) => {
     }
 
     const authHeaderVal = req.headers.get("Authorization") ?? "";
-    const userJwt = authHeaderVal.startsWith("Bearer ")
+    const rawToken = authHeaderVal.startsWith("Bearer ")
       ? authHeaderVal.slice(7)
       : "";
+    // A token equal to the anon key is the frontend's anonymous fallback,
+    // not a user JWT. If ANON_KEY is unset, skip this check to avoid
+    // misclassifying a real JWT as anonymous — fall through to auth.getUser
+    // which will reject it if invalid.
+    const userJwt =
+      rawToken && (!ANON_KEY || rawToken !== ANON_KEY) ? rawToken : "";
     let userId: string | null = null;
     let ownerLabel: string | null = body.ownerLabel ?? null;
 
     if (userJwt) {
-      const { data: ud } = await supabase.auth.getUser(userJwt);
-      userId = ud?.user?.id ?? null;
+      const { data: ud, error: authErr } = await supabase.auth.getUser(userJwt);
+      if (authErr || !ud?.user?.id) {
+        // A real JWT was presented but verification failed (invalid, expired,
+        // or auth service error). Reject — do NOT fall back to anonymous mode.
+        return json({ error: "অাপনার সেশন শেষ হয়ে গেছে। দয়া করে আবার লগইন করুন।" }, 401);
+      }
+      userId = ud.user.id;
       // Authenticated users: ignore client-supplied ownerLabel to prevent IDOR.
       // Their identity is verified via JWT; ownerLabel is only for anonymous users.
-      if (userId) ownerLabel = null;
+      ownerLabel = null;
     }
     // Validate ownerLabel format for anonymous users to prevent injection.
     if (ownerLabel) {

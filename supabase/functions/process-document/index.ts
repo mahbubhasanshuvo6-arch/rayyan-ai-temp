@@ -77,11 +77,18 @@ Deno.serve(async (req: Request) => {
     let userId: string | null = null;
     let ownerLabel: string | null = null;
 
-    if (jwt && jwt !== ANON_KEY) {
-      const { data: authData, error: authError } = await serviceClient.auth.getUser(jwt);
-      if (!authError && authData?.user?.id) {
-        userId = authData.user.id;
+    // Treat the anon key as "no JWT" — it's the frontend's anonymous fallback.
+    // If ANON_KEY is unset, skip this check to avoid misclassifying a real JWT.
+    const realJwt = jwt && (!ANON_KEY || jwt !== ANON_KEY) ? jwt : "";
+
+    if (realJwt) {
+      const { data: authData, error: authError } = await serviceClient.auth.getUser(realJwt);
+      if (authError || !authData?.user?.id) {
+        // A real JWT was presented but verification failed. Reject — do NOT
+        // fall back to anonymous mode.
+        return json({ error: "অাপনার সেশন শেষ হয়ে গেছে। দয়া করে আবার লগইন করুন।" }, 401);
       }
+      userId = authData.user.id;
     }
 
     const body = await req.json();
