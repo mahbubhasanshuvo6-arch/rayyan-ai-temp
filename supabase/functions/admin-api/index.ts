@@ -313,7 +313,7 @@ Deno.serve(async (req: Request) => {
         })
         .select()
         .maybeSingle();
-      if (error) return json({ error: "Insert failed: " + error.message }, 400);
+      if (error) return json({ error: "Insert failed." }, 400);
       await adminClient.rpc("log_admin_event", {
         p_action: "add_knowledge",
         p_detail: JSON.stringify({ title, is_shared: isShared }) as unknown as never,
@@ -350,7 +350,7 @@ Deno.serve(async (req: Request) => {
         .eq("id", id)
         .select()
         .maybeSingle();
-      if (error) return json({ error: "Update failed: " + error.message }, 400);
+      if (error) return json({ error: "Update failed." }, 400);
       await adminClient.rpc("log_admin_event", {
         p_action: "edit_knowledge",
         p_detail: JSON.stringify(patch) as unknown as never,
@@ -404,7 +404,7 @@ Deno.serve(async (req: Request) => {
       if (role !== "admin" && role !== "super_admin" && role !== "support") {
         return json({ error: "Forbidden" }, 403);
       }
-      const page = parseInt(url.searchParams.get("page") ?? "1");
+      const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
       const perPage = 50;
       const from = (page - 1) * perPage;
       const to = from + perPage - 1;
@@ -435,7 +435,7 @@ Deno.serve(async (req: Request) => {
       if (role !== "super_admin") {
         return json({ error: "Forbidden: only super admins can view users" }, 403);
       }
-      const page = parseInt(url.searchParams.get("page") ?? "1");
+      const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
       const perPage = 50;
       const search = url.searchParams.get("search") ?? "";
       const {
@@ -508,7 +508,7 @@ Deno.serve(async (req: Request) => {
           p_target_type: "user",
           p_outcome: "failed",
         });
-        return json({ error: fe.message }, 400);
+        return json({ error: "Failed to grant admin role." }, 400);
       }
       // Set app_metadata.is_admin = true on the auth user.
       await adminClient.auth.admin.updateUserById(targetUserId, {
@@ -546,7 +546,7 @@ Deno.serve(async (req: Request) => {
           p_target_type: "user",
           p_outcome: "failed",
         });
-        return json({ error: fe.message }, 400);
+        return json({ error: "Failed to revoke admin role." }, 400);
       }
       // Remove is_admin from app_metadata.
       await adminClient.auth.admin.updateUserById(targetUserId, {
@@ -586,7 +586,7 @@ Deno.serve(async (req: Request) => {
           p_target_type: "user",
           p_outcome: "failed",
         });
-        return json({ error: fe.message }, 400);
+        return json({ error: "Failed to update suspension status." }, 400);
       }
       await adminClient.rpc("log_admin_event", {
         p_action: "set_admin_suspended",
@@ -656,7 +656,7 @@ Deno.serve(async (req: Request) => {
         await adminClient.storage.from("user-documents").remove([doc.storage_path]);
       }
       const { error } = await adminClient.from("user_documents").delete().eq("id", id);
-      if (error) return json({ error: "Delete failed: " + error.message }, 400);
+      if (error) return json({ error: "Delete failed." }, 400);
       await adminClient.rpc("log_admin_event", {
         p_action: "delete_document",
         p_detail: JSON.stringify({ id }) as unknown as never,
@@ -742,7 +742,7 @@ async function handleSetup(req: Request): Promise<Response> {
   }
   const body = await req.json();
   const providedKey: string = body.setupKey ?? "";
-  if (providedKey !== ADMIN_SETUP_KEY) {
+  if (providedKey.length !== ADMIN_SETUP_KEY.length || !timingSafeEqual(providedKey, ADMIN_SETUP_KEY)) {
     return json({ error: "Invalid setup key." }, 403);
   }
   const email: string = body.email ?? "";
@@ -791,6 +791,15 @@ async function handleSetup(req: Request): Promise<Response> {
   });
 
   return json({ ok: true, userId: created.user?.id });
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 function json(obj: unknown, status = 200) {

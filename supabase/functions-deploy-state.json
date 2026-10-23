@@ -3,15 +3,15 @@
   "functions": {
     "admin-api": {
       "hasChanged": false,
-      "hash": "f214cf9dea6acf9af87ea76eb99bef7ce76f66fd9c80f663b64e00b63897b823"
+      "hash": "4682e83b0dc55c09e6049658f2b5af04a9171dccb1aba9bc4c419201f3b0a91c"
     },
     "gemini-chat": {
       "hasChanged": false,
-      "hash": "b3f8d7063fac47fc82b248fd0a2868c98f5f9424305250aa6e2af2d6d3f931e8"
+      "hash": "5c2f15c7e85109151b1364d26a947a1246c3df8eedc4f98c90d5eaa8b394bb17"
     },
     "process-document": {
       "hasChanged": false,
-      "hash": "ef55e7a1308413df7fda25bae0f3d26992114798cbfd69d57214eab0d2863041"
+      "hash": "fae483d3c8278136022045254c221f2815833b3cf8bef162a90c83d60d88c010"
     }
   }
 }
