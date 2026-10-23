@@ -79,6 +79,7 @@ jobs:
           needed = [
               "android.permission.INTERNET",
               "android.permission.ACCESS_NETWORK_STATE",
+              "android.permission.RECORD_AUDIO",
           ]
           existing = {
               el.get(f"{{{ANDROID_NS}}}name")
