@@ -93,10 +93,14 @@ Deno.serve(async (req: Request) => {
       if (!ownerLabel) {
         return json({ error: "Authentication required: provide a valid session or ownerLabel." }, 401);
       }
+      // Sanitize ownerLabel to prevent path traversal and injection
+      if (ownerLabel.length > 100 || /[<>"'\\/]/.test(ownerLabel)) {
+        return json({ error: "Invalid owner identifier." }, 400);
+      }
     }
 
     // The owner key is used for storage path folder and ownership verification
-    const ownerKey = userId ?? ownerLabel!;
+    const ownerKey = String(userId ?? ownerLabel).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
 
     // ---- EXTRACT action (for chat attachments — no DB/storage) ----
     if (action === "extract") {
@@ -172,7 +176,8 @@ Deno.serve(async (req: Request) => {
         .eq("id", documentId);
 
       if (delErr) {
-        return json({ error: "Failed to delete document: " + delErr.message }, 500);
+        console.error("Delete document error:", delErr.message);
+        return json({ error: "Failed to delete document. Please try again." }, 500);
       }
       return json({ success: true }, 200);
     }
@@ -260,7 +265,8 @@ Deno.serve(async (req: Request) => {
         .eq("id", existingDocId);
 
       if (updateErr) {
-        return json({ error: "Failed to update document record: " + updateErr.message }, 500);
+        console.error("Update document error:", updateErr.message);
+        return json({ error: "Failed to update document record. Please try again." }, 500);
       }
       documentId = existingDocId;
     } else {
@@ -280,7 +286,8 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
 
       if (docError || !docRecord) {
-        return json({ error: "Failed to create document record: " + (docError?.message ?? "unknown") }, 500);
+        console.error("Create document error:", docError?.message ?? "unknown");
+        return json({ error: "Failed to create document record. Please try again." }, 500);
       }
       documentId = docRecord.id;
     }
@@ -296,9 +303,10 @@ Deno.serve(async (req: Request) => {
     if (uploadError) {
       await serviceClient.from("user_documents").update({
         status: "failed",
-        error_message: "Storage upload failed: " + uploadError.message,
+        error_message: "Storage upload failed",
       }).eq("id", documentId);
-      return json({ error: "File upload failed: " + uploadError.message }, 500);
+      console.error("Storage upload error:", uploadError.message);
+      return json({ error: "File upload failed. Please try again." }, 500);
     }
 
     // ---- Extract text ----
@@ -373,9 +381,10 @@ Deno.serve(async (req: Request) => {
     if (chunkError) {
       await serviceClient.from("user_documents").update({
         status: "failed",
-        error_message: "Failed to store document chunks: " + chunkError.message,
+        error_message: "Failed to store document chunks",
       }).eq("id", documentId);
-      return json({ error: "Failed to store document chunks: " + chunkError.message }, 500);
+      console.error("Chunk storage error:", chunkError.message);
+      return json({ error: "Failed to store document chunks. Please try again." }, 500);
     }
 
     // ---- Update document status ----
@@ -395,8 +404,9 @@ Deno.serve(async (req: Request) => {
 
     return json({ document: result }, 200);
   } catch (err) {
+    console.error("process-document error:", err instanceof Error ? err.message : String(err));
     return json(
-      { error: err instanceof Error ? err.message : "Internal error" },
+      { error: "Internal error. Please try again." },
       500
     );
   }

@@ -218,9 +218,7 @@ function friendlyError(status: number, errMsg: string, fallbackAttempted: boolea
       ? "সবগুলো AI প্রোভাইডার সাময়িকভাবে ব্যস্ত। অনুগ্রহ করে কিছুক্ষণ পরে আবার চেষ্টা করুন।"
       : "AI পরিষেবায় সাময়িক সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।";
   }
-  return fallbackAttempted
-    ? "AI অনুরোধ সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।"
-    : errMsg.slice(0, 200) || "AI অনুরোধ সম্পন্ন করা যায়নি।";
+  return "AI অনুরোধ সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।";
 }
 
 interface ChatSettings {
@@ -874,10 +872,10 @@ async function retrieveMemory(
     .order("created_at", { ascending: false })
     .limit(50);
 
-  if (ownerLabel) {
-    query = query.eq("owner_label", ownerLabel);
-  } else if (userId) {
+  if (userId) {
     query = query.eq("user_id", userId);
+  } else if (ownerLabel) {
+    query = query.eq("owner_label", ownerLabel);
   }
 
   const { data, error } = await query;
@@ -1201,6 +1199,15 @@ Deno.serve(async (req: Request) => {
     if (userJwt) {
       const { data: ud } = await supabase.auth.getUser(userJwt);
       userId = ud?.user?.id ?? null;
+      // Authenticated users: ignore client-supplied ownerLabel to prevent IDOR.
+      // Their identity is verified via JWT; ownerLabel is only for anonymous users.
+      if (userId) ownerLabel = null;
+    }
+    // Validate ownerLabel format for anonymous users to prevent injection.
+    if (ownerLabel) {
+      if (typeof ownerLabel !== "string" || ownerLabel.length > 100 || /[<>"'\\]/.test(ownerLabel)) {
+        ownerLabel = null;
+      }
     }
 
     // ---- CHAT MODE ----
@@ -1928,7 +1935,7 @@ Deno.serve(async (req: Request) => {
                 .from("memory_entries")
                 .insert({ owner_label: ownerLabel, user_id: userId, content });
               toolResult = ie
-                ? { ok: false, result: ie.message }
+                ? { ok: false, result: "Memory save failed. Please try again." }
                 : { ok: true, result: "Saved to memory." };
             }
           }
@@ -1972,7 +1979,7 @@ Deno.serve(async (req: Request) => {
                 .from("knowledge_entries")
                 .insert({ owner_label: ownerLabel, user_id: userId, title, content, tags, source });
               toolResult = ie
-                ? { ok: false, result: ie.message }
+                ? { ok: false, result: "Knowledge save failed. Please try again." }
                 : { ok: true, result: `Saved to knowledge library as "${title}".` };
             }
           }
@@ -2154,8 +2161,9 @@ Deno.serve(async (req: Request) => {
 
     return json({ error: "Unknown mode." }, 400);
   } catch (err) {
+    console.error("gemini-chat top-level error:", err instanceof Error ? err.message : String(err));
     return json(
-      { error: err instanceof Error ? err.message : "Internal error" },
+      { error: "অভ্যন্তরীণ সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।" },
       500
     );
   }

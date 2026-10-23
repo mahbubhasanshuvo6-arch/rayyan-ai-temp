@@ -1032,7 +1032,7 @@ export default function ChatPage() {
                       {m.sources.map((src, i) => (
                         <a
                           key={i}
-                          href={src.url}
+                          href={/^https?:\/\//i.test(src.url) ? src.url : "#"}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex items-start gap-1.5 text-xs text-slate-300 hover:text-white transition group"

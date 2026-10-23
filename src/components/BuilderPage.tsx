@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase, EDGE_URL } from "@/lib/supabase";
 import { useSettings, accentMap } from "@/lib/useSettings";
+import { useAuth } from "@/lib/useAuth";
 import { navigate } from "@/lib/router";
 import type { Project, GeneratedFile } from "@/lib/types";
 import {
@@ -20,6 +21,7 @@ function getOrCreateOwnerLabel(): string {
 
 export default function BuilderPage() {
   const { settings } = useSettings();
+  const { session } = useAuth();
   const accent = accentMap[settings.accent_color] ?? accentMap.blue;
   const [projects, setProjects] = useState<Project[]>([]);
   const [prompt, setPrompt] = useState("");
@@ -94,7 +96,7 @@ export default function BuilderPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          Authorization: `Bearer ${session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
         },
         body: JSON.stringify({ mode: "build", prompt: prompt.trim(), ownerLabel }),
       });
