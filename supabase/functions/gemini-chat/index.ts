@@ -46,7 +46,22 @@ let geminiCooldownUntil = 0;
 let groqCooldownUntil = 0;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+
+// Decode a JWT payload (without verifying signature) to check its role claim.
+// Supabase anon keys are JWTs with role="anon" and no sub; real user JWTs
+// have role="authenticated" and a sub claim. This lets us distinguish the
+// frontend's anonymous fallback from a real user session without relying on
+// an env var that may differ from the frontend's value after key rotation.
+function isAnonKeyToken(token: string): boolean {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return false;
+    const payload = JSON.parse(atob(parts[1]));
+    return payload?.role === "anon" && !payload?.sub;
+  } catch {
+    return false;
+  }
+}
 
 // Rough per-1K-token USD costs (free tier = 0, tracked for when paid).
 const COST_TABLE: Record<string, { input: number; output: number }> = {
@@ -1194,12 +1209,10 @@ Deno.serve(async (req: Request) => {
     const rawToken = authHeaderVal.startsWith("Bearer ")
       ? authHeaderVal.slice(7)
       : "";
-    // A token equal to the anon key is the frontend's anonymous fallback,
-    // not a user JWT. If ANON_KEY is unset, skip this check to avoid
-    // misclassifying a real JWT as anonymous — fall through to auth.getUser
-    // which will reject it if invalid.
-    const userJwt =
-      rawToken && (!ANON_KEY || rawToken !== ANON_KEY) ? rawToken : "";
+    // The frontend sends the Supabase anon key as Bearer token when no
+    // session exists. Anon keys are JWTs with role="anon" and no sub —
+    // treat those as "no JWT" so the anonymous path (ownerLabel) is used.
+    const userJwt = rawToken && !isAnonKeyToken(rawToken) ? rawToken : "";
     let userId: string | null = null;
     let ownerLabel: string | null = body.ownerLabel ?? null;
 

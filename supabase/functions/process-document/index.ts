@@ -39,7 +39,20 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+
+// Decode a JWT payload (without verifying signature) to check its role claim.
+// Supabase anon keys are JWTs with role="anon" and no sub; real user JWTs
+// have role="authenticated" and a sub claim.
+function isAnonKeyToken(token: string): boolean {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return false;
+    const payload = JSON.parse(atob(parts[1]));
+    return payload?.role === "anon" && !payload?.sub;
+  } catch {
+    return false;
+  }
+}
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const CHUNK_SIZE = 1000;
@@ -77,9 +90,10 @@ Deno.serve(async (req: Request) => {
     let userId: string | null = null;
     let ownerLabel: string | null = null;
 
-    // Treat the anon key as "no JWT" — it's the frontend's anonymous fallback.
-    // If ANON_KEY is unset, skip this check to avoid misclassifying a real JWT.
-    const realJwt = jwt && (!ANON_KEY || jwt !== ANON_KEY) ? jwt : "";
+    // The frontend sends the Supabase anon key as Bearer token when no
+    // session exists. Anon keys are JWTs with role="anon" and no sub —
+    // treat those as "no JWT" so the anonymous path (ownerLabel) is used.
+    const realJwt = jwt && !isAnonKeyToken(jwt) ? jwt : "";
 
     if (realJwt) {
       const { data: authData, error: authError } = await serviceClient.auth.getUser(realJwt);
