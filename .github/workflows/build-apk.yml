@@ -134,22 +134,43 @@ jobs:
           unzip -t "$APK" > /dev/null 2>&1 || { echo "Error: APK is corrupt"; exit 1; }
           echo "APK integrity check passed"
 
-      - name: Zipalign APK
+      - name: Verify APK signing and alignment (read-only)
         run: |
           APK=$(find android/app/build/outputs/apk/debug -name '*.apk' | head -1)
-          ALIGNED="${APK%.apk}-aligned.apk"
+          if [ -z "$APK" ]; then
+            echo "Error: No APK file found"
+            exit 1
+          fi
+
+          echo "=== APK path and size ==="
+          echo "Path: $APK"
+          ls -lh "$APK"
+
           ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+
+          echo "=== Signature verification ==="
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          if [ ! -f "$APKSIGNER" ]; then
+            APKSIGNER=$(find "$ANDROID_HOME" -name apksigner -type f 2>/dev/null | head -1)
+          fi
+          if [ -n "$APKSIGNER" ] && [ -f "$APKSIGNER" ]; then
+            echo "Using apksigner: $APKSIGNER"
+            "$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1
+          else
+            echo "WARNING: apksigner not found — signature verification skipped"
+          fi
+
+          echo "=== Alignment verification ==="
           ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
           if [ ! -f "$ZIPALIGN" ]; then
-            ZIPALIGN=$(find "$ANDROID_HOME" -name zipalign -type f | head -1)
+            ZIPALIGN=$(find "$ANDROID_HOME" -name zipalign -type f 2>/dev/null | head -1)
           fi
-          if [ -z "$ZIPALIGN" ] || [ ! -f "$ZIPALIGN" ]; then
-            echo "Warning: zipalign not found, skipping alignment"
-            exit 0
+          if [ -n "$ZIPALIGN" ] && [ -f "$ZIPALIGN" ]; then
+            echo "Using zipalign: $ZIPALIGN"
+            "$ZIPALIGN" -c -v 4 "$APK" 2>&1
+          else
+            echo "WARNING: zipalign not found — alignment verification skipped"
           fi
-          "$ZIPALIGN" -f 4 "$APK" "$ALIGNED"
-          mv "$ALIGNED" "$APK"
-          echo "APK zipaligned successfully"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
