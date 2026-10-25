@@ -3,8 +3,7 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "src/**"
       - "public/**"
@@ -13,16 +12,11 @@ on:
       - "package.json"
       - "package-lock.json"
 
-permissions:
-  contents: read
-
 jobs:
-  build:
-    name: Build Debug APK
+  build-apk:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -35,94 +29,156 @@ jobs:
         run: npm ci
 
       - name: Build web app
+        run: npm run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        run: npm run build
 
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: 21
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
         run: |
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
-      - name: Add Android platform
-        run: npx cap add android
-
-      - name: Ensure microphone permission in Android manifest
+      - name: Add Capacitor Android platform
         run: |
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          if [ -f "$MANIFEST" ] && ! grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
-            sed -i 's/<application/<uses-permission android:name="android.permission.RECORD_AUDIO" \/><application/' "$MANIFEST"
+          if [ -d "android" ]; then
+            echo "Android platform already exists — skipping 'npx cap add android'."
+          else
+            npx cap add android
           fi
 
-      - name: Sync Capacitor
+      - name: Verify Android platform exists
+        run: |
+          if [ ! -d "android/app/src/main" ]; then
+            echo "Error: Android platform was not created. 'npx cap add android' failed."
+            exit 1
+          fi
+          echo "Android platform directory exists."
+
+      - name: Configure AndroidManifest permissions
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if [ ! -f "$MANIFEST" ]; then
+            echo "AndroidManifest.xml not found"
+            exit 1
+          fi
+          python3 - "$MANIFEST" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+
+          ANDROID_NS = "http://schemas.android.com/apk/res/android"
+          ET.register_namespace("android", ANDROID_NS)
+
+          p = sys.argv[1]
+          tree = ET.parse(p)
+          root = tree.getroot()
+
+          needed = [
+              "android.permission.INTERNET",
+              "android.permission.ACCESS_NETWORK_STATE",
+              "android.permission.RECORD_AUDIO",
+              "android.permission.MODIFY_AUDIO_SETTINGS",
+          ]
+          existing = {
+              el.get(f"{{{ANDROID_NS}}}name")
+              for el in root.findall("uses-permission")
+          }
+          for perm_name in needed:
+              if perm_name not in existing:
+                  el = ET.Element("uses-permission")
+                  el.set(f"{{{ANDROID_NS}}}name", perm_name)
+                  root.insert(0, el)
+
+          tree.write(p, encoding="utf-8", xml_declaration=True)
+
+          rewritten = open(p, encoding="utf-8").read()
+          ET.fromstring(rewritten)
+          print(rewritten)
+          PY
+          grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"
+          grep -q 'android.permission.MODIFY_AUDIO_SETTINGS' "$MANIFEST"
+          echo "Verified microphone permissions in AndroidManifest.xml"
+
+      - name: Sync web build to Android
         run: npx cap sync android
 
-      - name: Ensure app colors resource exists
+      - name: Add missing color resources
         run: |
-          mkdir -p android/app/src/main/res/values
-          COLORS="android/app/src/main/res/values/colors.xml"
+          COLORS=android/app/src/main/res/values/colors.xml
           if [ ! -f "$COLORS" ]; then
-            cat > "$COLORS" <<'EOF'
+            cat > "$COLORS" <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <color name="colorPrimary">#2196F3</color>
-              <color name="colorPrimaryDark">#1976D2</color>
-              <color name="colorAccent">#2196F3</color>
+              <color name="colorPrimary">#3B82F6</color>
+              <color name="colorPrimaryDark">#1E40AF</color>
+              <color name="colorAccent">#10B981</color>
           </resources>
-          EOF
+          XML
+            echo "Created colors.xml with missing color resources"
+          else
+            echo "colors.xml already exists"
           fi
 
       - name: Build debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Check APK file integrity
+      - name: Verify APK integrity
         run: |
-          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' | head -1)
           if [ -z "$APK" ]; then
-            echo "ERROR: APK file was not generated."
+            echo "Error: No APK file found"
             exit 1
           fi
-          unzip -t "$APK"
+          echo "APK found: $APK"
+          ls -lh "$APK"
+          unzip -t "$APK" > /dev/null 2>&1 || { echo "Error: APK is corrupt"; exit 1; }
+          echo "APK integrity check passed"
 
-      - name: Verify APK signature and alignment
-        shell: bash
+      - name: Verify APK signing and alignment (read-only)
         run: |
-          set -euo pipefail
-
-          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' -print -quit)
-
-          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
-            echo "ERROR: APK file not found."
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "Error: No APK file found"
             exit 1
           fi
 
-          echo "APK: $APK"
+          echo "=== APK path and size ==="
+          echo "Path: $APK"
           ls -lh "$APK"
 
-          BUILD_TOOLS="${ANDROID_HOME}/build-tools/36.0.0"
-          APKSIGNER="${BUILD_TOOLS}/apksigner"
-          ZIPALIGN="${BUILD_TOOLS}/zipalign"
+          ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
 
-          if [ -x "$APKSIGNER" ]; then
-            "$APKSIGNER" verify --verbose --print-certs "$APK"
+          echo "=== Signature verification ==="
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          if [ ! -f "$APKSIGNER" ]; then
+            APKSIGNER=$(find "$ANDROID_HOME" -name apksigner -type f 2>/dev/null | head -1)
+          fi
+          if [ -n "$APKSIGNER" ] && [ -f "$APKSIGNER" ]; then
+            echo "Using apksigner: $APKSIGNER"
+            "$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1
           else
-            echo "WARNING: apksigner was not found; signature verification skipped."
+            echo "WARNING: apksigner not found — signature verification skipped"
           fi
 
-          if [ -x "$ZIPALIGN" ]; then
-            "$ZIPALIGN" -c -v 4 "$APK"
+          echo "=== Alignment verification ==="
+          ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
+          if [ ! -f "$ZIPALIGN" ]; then
+            ZIPALIGN=$(find "$ANDROID_HOME" -name zipalign -type f 2>/dev/null | head -1)
+          fi
+          if [ -n "$ZIPALIGN" ] && [ -f "$ZIPALIGN" ]; then
+            echo "Using zipalign: $ZIPALIGN"
+            "$ZIPALIGN" -c -v 4 "$APK" 2>&1
           else
-            echo "WARNING: zipalign was not found; alignment verification skipped."
+            echo "WARNING: zipalign not found — alignment verification skipped"
           fi
 
       - name: Upload APK artifact
@@ -130,5 +186,6 @@ jobs:
         with:
           name: rayyan-ai-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
           if-no-files-found: error
-          retention-days: 7
+          
