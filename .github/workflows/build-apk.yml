@@ -50,8 +50,11 @@ jobs:
 
       - name: Add Capacitor Android platform
         run: |
-          if [ -d "android" ]; then
-            echo "Android platform already exists — skipping 'npx cap add android'."
+          if [ -f "android/app/src/main/AndroidManifest.xml" ] && [ -f "android/gradlew" ]; then
+            echo "Android platform already exists and is complete."
+          elif [ -d "android" ]; then
+            echo "Error: Android directory exists but platform is incomplete."
+            exit 1
           else
             npx cap add android
           fi
@@ -59,10 +62,14 @@ jobs:
       - name: Verify Android platform exists
         run: |
           if [ ! -d "android/app/src/main" ]; then
-            echo "Error: Android platform was not created. 'npx cap add android' failed."
+            echo "Error: Android platform was not created."
             exit 1
           fi
-          echo "Android platform directory exists."
+          if [ ! -f "android/gradlew" ]; then
+            echo "Error: Android Gradle wrapper is missing."
+            exit 1
+          fi
+          echo "Android platform verified."
 
       - name: Configure AndroidManifest permissions
         run: |
@@ -71,8 +78,10 @@ jobs:
             echo "AndroidManifest.xml not found"
             exit 1
           fi
+
           python3 - "$MANIFEST" <<'PY'
-          import sys, xml.etree.ElementTree as ET
+          import sys
+          import xml.etree.ElementTree as ET
 
           ANDROID_NS = "http://schemas.android.com/apk/res/android"
           ET.register_namespace("android", ANDROID_NS)
@@ -87,10 +96,12 @@ jobs:
               "android.permission.RECORD_AUDIO",
               "android.permission.MODIFY_AUDIO_SETTINGS",
           ]
+
           existing = {
               el.get(f"{{{ANDROID_NS}}}name")
               for el in root.findall("uses-permission")
           }
+
           for perm_name in needed:
               if perm_name not in existing:
                   el = ET.Element("uses-permission")
@@ -103,9 +114,10 @@ jobs:
           ET.fromstring(rewritten)
           print(rewritten)
           PY
+
           grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"
           grep -q 'android.permission.MODIFY_AUDIO_SETTINGS' "$MANIFEST"
-          echo "Verified microphone permissions in AndroidManifest.xml"
+          echo "Microphone permissions verified."
 
       - name: Sync web build to Android
         run: npx cap sync android
@@ -140,7 +152,10 @@ jobs:
           fi
           echo "APK found: $APK"
           ls -lh "$APK"
-          unzip -t "$APK" > /dev/null 2>&1 || { echo "Error: APK is corrupt"; exit 1; }
+          unzip -t "$APK" > /dev/null 2>&1 || {
+            echo "Error: APK is corrupt"
+            exit 1
+          }
           echo "APK integrity check passed"
 
       - name: Verify APK signing and alignment (read-only)
@@ -162,9 +177,10 @@ jobs:
           if [ ! -f "$APKSIGNER" ]; then
             APKSIGNER=$(find "$ANDROID_HOME" -name apksigner -type f 2>/dev/null | head -1)
           fi
+
           if [ -n "$APKSIGNER" ] && [ -f "$APKSIGNER" ]; then
             echo "Using apksigner: $APKSIGNER"
-            "$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1
+            "$APKSIGNER" verify --verbose --print-certs "$APK"
           else
             echo "WARNING: apksigner not found — signature verification skipped"
           fi
@@ -174,9 +190,10 @@ jobs:
           if [ ! -f "$ZIPALIGN" ]; then
             ZIPALIGN=$(find "$ANDROID_HOME" -name zipalign -type f 2>/dev/null | head -1)
           fi
+
           if [ -n "$ZIPALIGN" ] && [ -f "$ZIPALIGN" ]; then
             echo "Using zipalign: $ZIPALIGN"
-            "$ZIPALIGN" -c -v 4 "$APK" 2>&1
+            "$ZIPALIGN" -c -v 4 "$APK"
           else
             echo "WARNING: zipalign not found — alignment verification skipped"
           fi
@@ -188,4 +205,3 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
           retention-days: 30
           if-no-files-found: error
-          
