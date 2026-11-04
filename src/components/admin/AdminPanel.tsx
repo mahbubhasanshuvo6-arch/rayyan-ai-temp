@@ -13,10 +13,12 @@ import {
   DollarSign, Zap, Activity, Trash2, Loader2, KeyRound, Save,
   Sparkles, ShieldCheck, FileCode, BookOpen, Users, ScrollText,
   UserCog, Ban, ShieldOff, Search, Crown, UserCheck, XCircle,
-  Plus, Pencil,
+  Plus, Pencil, Plug,
 } from "lucide-react";
+import ProjectConnections from "@/components/admin/ProjectConnections";
 
 type Tab = "dashboard" | "users" | "audit" | "settings" | "projects" | "memory" | "knowledge" | "usage";
+type SettingsSubTab = "general" | "connections";
 
 function getAuthToken(): Promise<string> {
   return supabase.auth.getSession().then(({ data }) => data.session?.access_token ?? "");
@@ -527,6 +529,33 @@ function AuditTab() {
 
 // ---------- Settings ----------
 function SettingsTab() {
+  const [subTab, setSubTab] = useState<SettingsSubTab>("general");
+  const subTabs: { id: SettingsSubTab; label: string; icon: any }[] = [
+    { id: "general", label: "General", icon: Sparkles },
+    { id: "connections", label: "Project Connections", icon: Plug },
+  ];
+
+  return (
+    <div className="max-w-3xl space-y-6">
+      <div className="flex gap-2 border-b border-slate-800">
+        {subTabs.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setSubTab(s.id)}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm transition border-b-2 -mb-px ${
+              subTab === s.id ? "border-sky-500 text-white" : "border-transparent text-slate-400 hover:text-white"
+            }`}
+          >
+            <s.icon className="w-4 h-4" /> {s.label}
+          </button>
+        ))}
+      </div>
+      {subTab === "general" ? <GeneralSettings /> : <ProjectConnections />}
+    </div>
+  );
+}
+
+function GeneralSettings() {
   const { settings, loading } = useSettings();
   const accent = accentMap[settings.accent_color] ?? accentMap.blue;
   const [form, setForm] = useState<AppSettings>(settings);
