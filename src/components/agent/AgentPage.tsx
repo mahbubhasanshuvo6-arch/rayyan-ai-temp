@@ -22,7 +22,7 @@ function AgentWorkspace({ userId }: { userId: string }) {
   const [createError, setCreateError] = useState<string | null>(null);
   const [creatingBusy, setCreatingBusy] = useState(false);
 
-  const hasSelection = !!agent.selectedId && !creating;
+  const hasSelection = !!agent.selectedId || creating;
   const dbReady = agent.dbState === "ready";
 
   async function handleCreate(title: string, goal: string) {
@@ -126,7 +126,10 @@ function AgentWorkspace({ userId }: { userId: string }) {
         <main className={`${hasSelection ? "flex" : "hidden"} min-w-0 flex-1 flex-col md:flex`}>
           {hasSelection && (
             <button
-              onClick={() => agent.setSelectedId(null)}
+              onClick={() => {
+                agent.setSelectedId(null);
+                setCreating(false);
+              }}
               className="flex items-center gap-2 border-b border-slate-800 px-4 py-3 text-sm text-slate-300 md:hidden"
             >
               <ArrowLeft className="h-4 w-4" /> All tasks

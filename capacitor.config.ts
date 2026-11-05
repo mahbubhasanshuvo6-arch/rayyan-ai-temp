@@ -5,7 +5,7 @@ const config: CapacitorConfig = {
   appName: "Rayyan AI",
   webDir: "dist",
   android: {
-    captureInput: true,
+    captureInput: false,
   },
 };
 
