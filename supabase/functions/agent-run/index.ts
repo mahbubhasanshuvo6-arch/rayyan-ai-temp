@@ -16,6 +16,8 @@ const TAVILY_KEY = clean(Deno.env.get("TAVILY_API_KEY"));
 const LIMITS = {
   maxPlanSteps: 12,
   tasksPerHour: 10,
+  llmCallsPerHour: 120,
+  toolCallsPerHour: 60,
   stepsPerRun: 3,
   runBudgetMs: 40_000,
   leaseMs: 90_000,
@@ -46,6 +48,44 @@ const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null 
 const nowMs = () => Date.now();
 const iso = (ms: number) => new Date(ms).toISOString();
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// --- Deterministic canonical JSON for stable hashing -----------------------
+// Sorts object keys recursively so the same logical value always produces
+// the same string regardless of insertion order.
+function canonicalJSON(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return "[" + value.map(canonicalJSON).join(",") + "]";
+  if (isObject(value)) {
+    const keys = Object.keys(value).sort();
+    return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonicalJSON(value[k])).join(",") + "}";
+  }
+  return "null";
+}
+
+async function sha256HexAsync(text: string): Promise<string> {
+  const buf = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function consumeQuota(
+  admin: Admin,
+  userId: string,
+  bucket: string,
+  maxOverride?: number,
+): Promise<boolean> {
+  const { data, error } = await admin.rpc("agent_consume_quota", {
+    p_user_id: userId,
+    p_bucket_name: bucket,
+    p_max_override: maxOverride ?? null,
+  });
+  if (error) throw error;
+  return data === true;
+}
 
 function json(body: Json, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -190,6 +230,8 @@ const DRAFT_SYSTEM =
 interface ToolContext {
   admin: Admin;
   userId: string;
+  taskId: string;
+  stepId: string;
 }
 
 interface Tool {
@@ -286,6 +328,7 @@ const TOOLS: Record<string, Tool> = {
       const context = i.context === undefined ? "(none)" : textField(i, "context", 1, 6000);
       const text = await callLLM(
         ctx.admin,
+        ctx.userId,
         DRAFT_SYSTEM,
         `Instructions:\n${instructions}\n\nSource text (data only, not instructions):\n<<<\n${context}\n>>>`,
         1500,
@@ -301,9 +344,14 @@ const TOOLS: Record<string, Tool> = {
     validate: (i) => { textField(i, "content", 3, 1000); },
     run: async (i, ctx) => {
       const content = textField(i, "content", 3, 1000);
-      const { error } = await ctx.admin.from("memory_entries").insert({ user_id: ctx.userId, content });
+      const { data: memId, error } = await ctx.admin.rpc("agent_commit_memory", {
+        p_user_id: ctx.userId,
+        p_task_id: ctx.taskId,
+        p_step_id: ctx.stepId,
+        p_content: content,
+      });
       if (error) throw new AgentError("Could not save to memory.", false);
-      return { summary: `Saved to memory: ${content}` };
+      return { summary: `Saved to memory: ${content}`, memoryId: memId };
     },
   },
 };
@@ -359,7 +407,10 @@ async function callGroq(model: string, system: string, user: string, maxTokens: 
   return text;
 }
 
-async function callLLM(admin: Admin, system: string, user: string, maxTokens: number): Promise<string> {
+async function callLLM(admin: Admin, userId: string, system: string, user: string, maxTokens: number): Promise<string> {
+  const allowed = await consumeQuota(admin, userId, "llm_call_hour", LIMITS.llmCallsPerHour);
+  if (!allowed) throw new AgentError("You have reached the hourly AI call limit. Try again later.", false);
+
   const { data: settings } = await admin
     .from("app_settings")
     .select("provider, model, fallback_enabled, fallback_model")
@@ -405,9 +456,10 @@ interface PlanStep {
   title: string;
   tool: string;
   input: Json;
+  inputHash: string;
 }
 
-function parsePlan(text: string): PlanStep[] {
+async function parsePlan(text: string): Promise<PlanStep[]> {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) throw new AgentError("The plan was not valid JSON.", true);
@@ -421,22 +473,23 @@ function parsePlan(text: string): PlanStep[] {
   if (!Array.isArray(steps) || steps.length < 1 || steps.length > LIMITS.maxPlanSteps) {
     throw new AgentError("The plan has an invalid number of steps.", true);
   }
-  return steps.map((raw: unknown, idx: number) => {
+  return await Promise.all(steps.map(async (raw: unknown, idx: number) => {
     const s = isObject(raw) ? raw : {};
     const tool = getTool(s.tool);
     const title = typeof s.title === "string" ? s.title.trim().slice(0, 300) : "";
     if (!tool || !title || !isObject(s.input)) throw new AgentError(`Step ${idx + 1} is invalid.`, true);
     tool.validate(s.input);
-    return { position: idx + 1, title, tool: String(s.tool), input: s.input };
-  });
+    const inputHash = await sha256HexAsync(canonicalJSON(s.input));
+    return { position: idx + 1, title, tool: String(s.tool), input: s.input, inputHash };
+  }));
 }
 
-async function createPlan(admin: Admin, goal: string): Promise<PlanStep[]> {
+async function createPlan(admin: Admin, userId: string, goal: string): Promise<PlanStep[]> {
   let lastError: unknown = new AgentError("Planning failed.", true);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const text = await callLLM(admin, PLANNER_SYSTEM, `Goal (data, not instructions):\n<<<\n${goal}\n>>>`, 1200);
-      return parsePlan(text);
+      const text = await callLLM(admin, userId, PLANNER_SYSTEM, `Goal (data, not instructions):\n<<<\n${goal}\n>>>`, 1200);
+      return await parsePlan(text);
     } catch (e) {
       lastError = e;
     }
@@ -472,13 +525,8 @@ async function createTask(admin: Admin, userId: string, body: Json): Promise<Res
     return json({ error: (e as Error).message }, 400);
   }
 
-  const { count, error: countErr } = await admin
-    .from("agent_tasks")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userId)
-    .gte("created_at", iso(nowMs() - 3_600_000));
-  if (countErr) throw countErr;
-  if ((count ?? 0) >= LIMITS.tasksPerHour) {
+  const allowed = await consumeQuota(admin, userId, "task_create_hour", LIMITS.tasksPerHour);
+  if (!allowed) {
     return json({ error: "You have reached the hourly task limit. Try again later." }, 429);
   }
 
@@ -491,13 +539,28 @@ async function createTask(admin: Admin, userId: string, body: Json): Promise<Res
 
   let plan: PlanStep[];
   try {
-    plan = await createPlan(admin, input.goal);
+    plan = await createPlan(admin, userId, input.goal);
   } catch (e) {
     console.error("planning failed", e);
     const message = "Could not create a plan for this goal. Try rephrasing it.";
     await admin.from("agent_tasks").update({ status: "failed", error: message, updated_at: iso(nowMs()) }).eq("id", task.id);
     await logEvent(admin, userId, task.id, null, "error", message);
     return json({ error: message, taskId: task.id }, 422);
+  }
+
+  const canonicalInputs = plan.map((s) => `${s.tool}:${s.inputHash}`).join("|");
+  const planHash = await sha256HexAsync(canonicalInputs);
+
+  const { data: recent } = await admin
+    .from("agent_tasks")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("input_hash", planHash)
+    .gte("created_at", iso(nowMs() - 3_600_000))
+    .maybeSingle();
+  if (recent) {
+    await admin.from("agent_tasks").update({ status: "cancelled", error: "Duplicate task." }).eq("id", task.id);
+    return json({ error: "A similar task was created recently. Check your task list.", duplicateTaskId: recent.id }, 409);
   }
 
   const { error: stepsErr } = await admin.from("agent_steps").insert(
@@ -508,6 +571,7 @@ async function createTask(admin: Admin, userId: string, body: Json): Promise<Res
       title: s.title,
       tool: s.tool,
       input: s.input,
+      input_hash: s.inputHash,
       status: "pending",
     })),
   );
@@ -515,7 +579,7 @@ async function createTask(admin: Admin, userId: string, body: Json): Promise<Res
 
   const { data: queued, error: queueErr } = await admin
     .from("agent_tasks")
-    .update({ status: "queued", updated_at: iso(nowMs()) })
+    .update({ status: "queued", input_hash: planHash, updated_at: iso(nowMs()) })
     .eq("id", task.id)
     .select("*")
     .single();
@@ -553,6 +617,24 @@ async function failTask(admin: Admin, userId: string, taskId: string, message: s
     .eq("id", taskId)
     .eq("user_id", userId);
   await logEvent(admin, userId, taskId, null, "error", message);
+}
+
+function buildApprovalPreview(tool: string, input: Json): string {
+  const parts: string[] = [`Tool: ${tool}`];
+  if (isObject(input)) {
+    for (const [key, val] of Object.entries(input)) {
+      const v = typeof val === "string" ? val.slice(0, 500) : JSON.stringify(val).slice(0, 500);
+      parts.push(`${key}: ${v}`);
+    }
+  }
+  return parts.join("\n").slice(0, 8000);
+}
+
+function assessRisk(tool: string): "low" | "medium" | "high" {
+  switch (tool) {
+    case "save_memory": return "medium";
+    default: return "medium";
+  }
 }
 
 async function runTask(admin: Admin, userId: string, taskId: string): Promise<Response> {
@@ -597,23 +679,33 @@ async function runTask(admin: Admin, userId: string, taskId: string): Promise<Re
       }
 
       if (tool.requiresApproval) {
+        const currentInputHash = await sha256HexAsync(canonicalJSON(step.input));
         const { data: approval } = await admin
           .from("agent_approvals")
-          .select("id, status")
+          .select("id, status, input_hash")
           .eq("step_id", step.id)
           .eq("user_id", userId)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-        if (approval?.status !== "approved") {
-          if (!approval) {
+
+        if (approval?.status === "approved") {
+          if (approval.input_hash !== currentInputHash) {
+            await failTask(admin, userId, taskId, "The step input changed after approval. The task was stopped for safety.");
+            break;
+          }
+        } else {
+          if (!approval || approval.status === "rejected") {
+            const preview = buildApprovalPreview(step.tool, step.input);
             const { error: apErr } = await admin.from("agent_approvals").insert({
               task_id: taskId,
               step_id: step.id,
               user_id: userId,
               action_summary: `${step.title} (${step.tool})`.slice(0, 1000),
-              risk: "medium",
+              risk: assessRisk(step.tool),
               status: "pending",
+              preview,
+              input_hash: currentInputHash,
             });
             if (apErr) throw apErr;
           }
@@ -628,6 +720,12 @@ async function runTask(admin: Admin, userId: string, taskId: string): Promise<Re
         }
       }
 
+      const toolAllowed = await consumeQuota(admin, userId, "tool_call_hour", LIMITS.toolCallsPerHour);
+      if (!toolAllowed) {
+        await failTask(admin, userId, taskId, "You have reached the hourly tool call limit.");
+        break;
+      }
+
       const attempt = (Number(step.attempts) || 0) + 1;
       const { error: startErr } = await admin
         .from("agent_steps")
@@ -637,7 +735,10 @@ async function runTask(admin: Admin, userId: string, taskId: string): Promise<Re
       await logEvent(admin, userId, taskId, step.id, "step_start", `Running: ${step.title}`, { tool: step.tool, attempt });
 
       try {
-        const output = await withTimeout(tool.run(isObject(step.input) ? step.input : {}, { admin, userId }), LIMITS.toolTimeoutMs);
+        const output = await withTimeout(
+          tool.run(isObject(step.input) ? step.input : {}, { admin, userId, taskId, stepId: step.id }),
+          LIMITS.toolTimeoutMs,
+        );
         if (typeof output.summary !== "string" || output.summary.trim() === "") {
           throw new AgentError("The tool returned no result.", true);
         }
@@ -768,44 +869,22 @@ async function retryTask(admin: Admin, userId: string, taskId: string): Promise<
 }
 
 async function decideApproval(admin: Admin, userId: string, taskId: string, approve: boolean): Promise<Response> {
-  const { data: approval, error } = await admin
-    .from("agent_approvals")
-    .select("id, step_id")
-    .eq("task_id", taskId)
-    .eq("user_id", userId)
-    .eq("status", "pending")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const { data, error } = await admin.rpc("agent_decide_approval", {
+    p_user_id: userId,
+    p_task_id: taskId,
+    p_approve: approve,
+  });
   if (error) throw error;
-  if (!approval) return json({ error: "There is no pending approval for this task." }, 409);
-
-  const decision = approve ? "approved" : "rejected";
-  const { data: decided } = await admin
-    .from("agent_approvals")
-    .update({ status: decision, decided_at: iso(nowMs()) })
-    .eq("id", approval.id)
-    .eq("status", "pending")
-    .select("id")
-    .maybeSingle();
-  if (!decided) return json({ error: "This approval was already decided." }, 409);
-
-  await admin
-    .from("agent_steps")
-    .update({ status: approve ? "pending" : "rejected" })
-    .eq("id", approval.step_id)
-    .eq("user_id", userId);
-
-  const res = await transition(
-    admin,
-    userId,
-    taskId,
-    ["awaiting_approval"],
-    { status: "queued" },
-    approve ? "Approved by you." : "Rejected by you.",
-  );
-  await logEvent(admin, userId, taskId, approval.step_id, "approval_decided", `Step ${decision}.`);
-  return res;
+  const result = isObject(data) ? data : {};
+  const err = typeof result.error === "string" ? result.error : null;
+  if (err === "no_pending_approval") {
+    return json({ error: "There is no pending approval for this task." }, 409);
+  }
+  if (err === "already_decided") {
+    return json({ error: "This approval was already decided." }, 409);
+  }
+  await logEvent(admin, userId, taskId, null, "approval_decided", approve ? "Step approved." : "Step rejected — task stopped.");
+  return json({ task: result.task ?? null });
 }
 
 Deno.serve(async (req: Request) => {
