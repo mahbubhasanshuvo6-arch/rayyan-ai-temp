@@ -37,7 +37,8 @@ function, all with hardened validation and explicit search_path.
 
 ## Security
 - RLS enabled on ALL seven tables.
-- Owner-scoped CRUD policies (auth.uid() = user_id) on all tables.
+- Owner-scoped SELECT policies (auth.uid() = user_id) on all tables.
+- All INSERT/UPDATE/DELETE goes through the edge function (service_role, bypasses RLS).
 - agent_archive is SELECT-only (no INSERT/UPDATE/DELETE via client).
 - agent_quota_limits is SELECT-only for clients; quota enforcement is via
   the agent_consume_quota SECURITY DEFINER function (service_role only).
@@ -280,16 +281,15 @@ GRANT USAGE, SELECT ON SEQUENCE agent_quota_limits_id_seq TO service_role;
 -- GRANTS — authenticated users get owner-scoped access via RLS
 -- ============================================================
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON agent_tasks TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON agent_steps TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON agent_events TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON agent_approvals TO authenticated;
-GRANT SELECT, INSERT, DELETE ON agent_memory TO authenticated;
+-- All agent table writes go through the agent-run edge function (service_role),
+-- so authenticated users only need SELECT to display their own data.
+GRANT SELECT ON agent_tasks TO authenticated;
+GRANT SELECT ON agent_steps TO authenticated;
+GRANT SELECT ON agent_events TO authenticated;
+GRANT SELECT ON agent_approvals TO authenticated;
+GRANT SELECT ON agent_memory TO authenticated;
 GRANT SELECT ON agent_quota_limits TO authenticated;
 GRANT SELECT ON agent_archive TO authenticated;
-
--- Sequence grants for authenticated (bigserial tables that they can INSERT into)
-GRANT USAGE, SELECT ON SEQUENCE agent_events_id_seq TO authenticated;
 
 -- ============================================================
 -- RLS POLICIES — agent_tasks
@@ -299,17 +299,9 @@ DROP POLICY IF EXISTS "select_own_agent_tasks" ON agent_tasks;
 CREATE POLICY "select_own_agent_tasks" ON agent_tasks
   FOR SELECT TO authenticated USING (auth.uid() = user_id);
 
-DROP POLICY IF EXISTS "insert_own_agent_tasks" ON agent_tasks;
-CREATE POLICY "insert_own_agent_tasks" ON agent_tasks
-  FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "update_own_agent_tasks" ON agent_tasks;
-CREATE POLICY "update_own_agent_tasks" ON agent_tasks
-  FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "delete_own_agent_tasks" ON agent_tasks;
-CREATE POLICY "delete_own_agent_tasks" ON agent_tasks
-  FOR DELETE TO authenticated USING (auth.uid() = user_id);
+-- No INSERT/UPDATE/DELETE policies for authenticated on agent_tasks.
+-- All task writes go through the edge function (service_role, bypasses RLS).
+-- Authenticated users can only SELECT their own tasks.
 
 -- ============================================================
 -- RLS POLICIES — agent_steps
@@ -319,17 +311,9 @@ DROP POLICY IF EXISTS "select_own_agent_steps" ON agent_steps;
 CREATE POLICY "select_own_agent_steps" ON agent_steps
   FOR SELECT TO authenticated USING (auth.uid() = user_id);
 
-DROP POLICY IF EXISTS "insert_own_agent_steps" ON agent_steps;
-CREATE POLICY "insert_own_agent_steps" ON agent_steps
-  FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "update_own_agent_steps" ON agent_steps;
-CREATE POLICY "update_own_agent_steps" ON agent_steps
-  FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "delete_own_agent_steps" ON agent_steps;
-CREATE POLICY "delete_own_agent_steps" ON agent_steps
-  FOR DELETE TO authenticated USING (auth.uid() = user_id);
+-- No INSERT/UPDATE/DELETE policies for authenticated on agent_steps.
+-- All step writes go through the edge function (service_role, bypasses RLS).
+-- Authenticated users can only SELECT their own steps.
 
 -- ============================================================
 -- RLS POLICIES — agent_events
@@ -339,17 +323,9 @@ DROP POLICY IF EXISTS "select_own_agent_events" ON agent_events;
 CREATE POLICY "select_own_agent_events" ON agent_events
   FOR SELECT TO authenticated USING (auth.uid() = user_id);
 
-DROP POLICY IF EXISTS "insert_own_agent_events" ON agent_events;
-CREATE POLICY "insert_own_agent_events" ON agent_events
-  FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "update_own_agent_events" ON agent_events;
-CREATE POLICY "update_own_agent_events" ON agent_events
-  FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "delete_own_agent_events" ON agent_events;
-CREATE POLICY "delete_own_agent_events" ON agent_events
-  FOR DELETE TO authenticated USING (auth.uid() = user_id);
+-- No INSERT/UPDATE/DELETE policies for authenticated on agent_events.
+-- All event writes go through the edge function (service_role, bypasses RLS).
+-- Authenticated users can only SELECT their own events.
 
 -- ============================================================
 -- RLS POLICIES — agent_approvals
@@ -359,17 +335,9 @@ DROP POLICY IF EXISTS "select_own_agent_approvals" ON agent_approvals;
 CREATE POLICY "select_own_agent_approvals" ON agent_approvals
   FOR SELECT TO authenticated USING (auth.uid() = user_id);
 
-DROP POLICY IF EXISTS "insert_own_agent_approvals" ON agent_approvals;
-CREATE POLICY "insert_own_agent_approvals" ON agent_approvals
-  FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "update_own_agent_approvals" ON agent_approvals;
-CREATE POLICY "update_own_agent_approvals" ON agent_approvals
-  FOR UPDATE TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "delete_own_agent_approvals" ON agent_approvals;
-CREATE POLICY "delete_own_agent_approvals" ON agent_approvals
-  FOR DELETE TO authenticated USING (auth.uid() = user_id);
+-- No INSERT/UPDATE/DELETE policies for authenticated on agent_approvals.
+-- All approval writes go through the edge function (service_role, bypasses RLS).
+-- Authenticated users can only SELECT their own approvals.
 
 -- ============================================================
 -- RLS POLICIES — agent_memory
@@ -379,15 +347,9 @@ DROP POLICY IF EXISTS "select_own_agent_memory" ON agent_memory;
 CREATE POLICY "select_own_agent_memory" ON agent_memory
   FOR SELECT TO authenticated USING (auth.uid() = user_id);
 
-DROP POLICY IF EXISTS "insert_own_agent_memory" ON agent_memory;
-CREATE POLICY "insert_own_agent_memory" ON agent_memory
-  FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
-
--- No UPDATE policy — memory entries are immutable once written.
-
-DROP POLICY IF EXISTS "delete_own_agent_memory" ON agent_memory;
-CREATE POLICY "delete_own_agent_memory" ON agent_memory
-  FOR DELETE TO authenticated USING (auth.uid() = user_id);
+-- No INSERT/UPDATE/DELETE policies for authenticated on agent_memory.
+-- Memory is committed only through the agent_commit_memory RPC (service_role).
+-- Authenticated users can only SELECT their own memory entries.
 
 -- ============================================================
 -- RLS POLICIES — agent_quota_limits
