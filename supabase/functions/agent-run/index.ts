@@ -50,8 +50,6 @@ const iso = (ms: number) => new Date(ms).toISOString();
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // --- Deterministic canonical JSON for stable hashing -----------------------
-// Sorts object keys recursively so the same logical value always produces
-// the same string regardless of insertion order.
 function canonicalJSON(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "string") return JSON.stringify(value);
@@ -868,6 +866,20 @@ async function retryTask(admin: Admin, userId: string, taskId: string): Promise<
   );
 }
 
+// Maps error codes returned by agent_decide_approval() to user-facing messages.
+// The RPC function validates task status, approval status, and step status
+// server-side before making any decision. Terminal tasks (completed/failed/
+// cancelled) are blocked from approval decisions.
+const APPROVAL_ERROR_MESSAGES: Record<string, string> = {
+  no_pending_approval: "There is no pending approval for this task.",
+  already_decided: "This approval was already decided.",
+  task_not_found: "This task could not be found.",
+  task_not_active: "This task is no longer active and cannot be approved.",
+  step_not_found: "The step for this approval could not be found.",
+  input_changed: "The step changed after the approval was requested. The task was stopped for safety.",
+  invalid_user: "Please sign in to use the agent.",
+};
+
 async function decideApproval(admin: Admin, userId: string, taskId: string, approve: boolean): Promise<Response> {
   const { data, error } = await admin.rpc("agent_decide_approval", {
     p_user_id: userId,
@@ -877,11 +889,9 @@ async function decideApproval(admin: Admin, userId: string, taskId: string, appr
   if (error) throw error;
   const result = isObject(data) ? data : {};
   const err = typeof result.error === "string" ? result.error : null;
-  if (err === "no_pending_approval") {
-    return json({ error: "There is no pending approval for this task." }, 409);
-  }
-  if (err === "already_decided") {
-    return json({ error: "This approval was already decided." }, 409);
+  if (err) {
+    const message = APPROVAL_ERROR_MESSAGES[err] ?? "The approval could not be processed.";
+    return json({ error: message }, 409);
   }
   await logEvent(admin, userId, taskId, null, "approval_decided", approve ? "Step approved." : "Step rejected — task stopped.");
   return json({ task: result.task ?? null });
