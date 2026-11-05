@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { Loader2, Send, AlertCircle } from "lucide-react";
 
 const TITLE_MAX = 200;
@@ -19,7 +19,7 @@ export default function AgentTaskForm({
   const [goal, setGoal] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const cleanTitle = title.trim();
     const cleanGoal = goal.trim();

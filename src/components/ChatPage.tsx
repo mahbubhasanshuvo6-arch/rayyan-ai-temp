@@ -771,6 +771,12 @@ export default function ChatPage() {
             <Sparkles className="w-4 h-4" /> App Builder
           </button>
           <button
+            onClick={() => navigate("agent")}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition"
+          >
+            <Bot className="w-4 h-4" /> Agent
+          </button>
+          <button
             onClick={() => navigate("admin")}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition"
           >
