@@ -84,15 +84,46 @@ function isPublicUrl(raw: string): boolean {
   if (host.startsWith("[") || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal")) {
     return false;
   }
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    const [a, b] = host.split(".").map(Number);
-    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
-    if (a === 100 && b >= 64 && b <= 127) return false;
-    if (a === 169 && b === 254) return false;
-    if (a === 172 && b >= 16 && b <= 31) return false;
-    if (a === 192 && b === 168) return false;
-  }
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return isPublicIPv4(host);
   return true;
+}
+
+function isPublicIPv4(ip: string): boolean {
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  const [a, b, c] = parts;
+  if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+  if (a === 100 && b >= 64 && b <= 127) return false;
+  if (a === 169 && b === 254) return false;
+  if (a === 172 && b >= 16 && b <= 31) return false;
+  if (a === 192 && b === 168) return false;
+  if (a === 192 && b === 0 && c === 0) return false;
+  if (a === 198 && (b === 18 || b === 19)) return false;
+  return true;
+}
+
+function isPublicIPv6(ip: string): boolean {
+  const v = ip.toLowerCase();
+  if (!v.includes(":")) return false;
+  if (v.startsWith("::")) return false;
+  if (v.includes("ffff:")) return false;
+  if (/^f[cd]/.test(v)) return false;
+  if (/^fe[89ab]/.test(v)) return false;
+  if (v.startsWith("ff")) return false;
+  if (v.startsWith("2001:db8")) return false;
+  if (v.startsWith("64:ff9b")) return false;
+  return true;
+}
+
+async function assertResolvesToPublicAddress(hostname: string): Promise<void> {
+  const blocked = () => new AgentError("That address is not a public web page.", false);
+  const [v4, v6] = await Promise.all([
+    Deno.resolveDns(hostname, "A").catch(() => [] as string[]),
+    Deno.resolveDns(hostname, "AAAA").catch(() => [] as string[]),
+  ]);
+  const addresses = [...v4, ...v6];
+  if (addresses.length === 0) throw new AgentError("That address could not be verified.", false);
+  if (!addresses.every((ip) => (ip.includes(":") ? isPublicIPv6(ip) : isPublicIPv4(ip)))) throw blocked();
 }
 
 function evaluate(src: string): number {
@@ -209,6 +240,7 @@ const TOOLS: Record<string, Tool> = {
     run: async (i) => {
       const url = textField(i, "url", 8, 2000);
       if (!isPublicUrl(url)) throw new AgentError("That address is not a public web page.", false);
+      await assertResolvesToPublicAddress(new URL(url).hostname);
       const res = await fetch(url, {
         redirect: "error",
         headers: { "User-Agent": "RayyanAgent/1.0" },

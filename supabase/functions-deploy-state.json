@@ -5,6 +5,10 @@
       "hasChanged": false,
       "hash": "4682e83b0dc55c09e6049658f2b5af04a9171dccb1aba9bc4c419201f3b0a91c"
     },
+    "agent-run": {
+      "hasChanged": false,
+      "hash": "000f88404dbcf67454d57415566c473b0006682e034e0302b6ae89d4fc26c8df"
+    },
     "gemini-chat": {
       "hasChanged": false,
       "hash": "862f28a0ab6ef5be15a539937200ca2f93790a98a29f0e8896500faa63f9694a"
