@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Rayyan AI</string>
+    <string name="title_activity_main">Rayyan AI</string>
+    <string name="package_name">com.rayyanai.app</string>
+    <string name="custom_url_scheme">com.rayyanai.app</string>
+</resources>
