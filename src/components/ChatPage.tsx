@@ -1285,7 +1285,7 @@ export default function ChatPage() {
                       sendMessage();
                     }
                   }}
-                  placeholder="Message Rayyan AI"
+                  placeholder="Message Rayyan"
                   rows={1}
                   className="flex-1 min-w-0 bg-transparent text-slate-100 placeholder:text-slate-500 px-1 sm:px-2 py-2 text-sm sm:text-[15px] resize-none outline-none max-h-32 leading-relaxed"
                   style={{ minHeight: "24px" }}
@@ -1346,7 +1346,7 @@ export default function ChatPage() {
               </div>
 
             <p className="text-center text-[11px] text-slate-600 mt-2 hidden sm:block">
-              Rayyan AI can make mistakes. Verify important information.
+              Rayyan can make mistakes. Verify important information.
             </p>
           </div>
         </div>

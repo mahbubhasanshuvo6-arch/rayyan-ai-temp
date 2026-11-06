@@ -1,6 +1,6 @@
 {
 	"appId": "com.rayyanai.app",
-	"appName": "Rayyan AI",
+	"appName": "Rayyan",
 	"webDir": "dist",
 	"android": {
 		"captureInput": false

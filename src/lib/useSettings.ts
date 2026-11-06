@@ -4,7 +4,7 @@ import type { AppSettings } from "./types";
 
 const DEFAULT_SETTINGS: AppSettings = {
   id: 1,
-  app_name: "Rayyan AI",
+  app_name: "Rayyan",
   tagline: "Your AI assistant",
   theme: "slate",
   accent_color: "blue",

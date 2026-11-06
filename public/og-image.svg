@@ -12,7 +12,7 @@
   <rect width="1200" height="630" fill="url(#bg)"/>
   <rect x="72" y="210" width="120" height="120" rx="28" fill="url(#g)"/>
   <path d="M132 246l8 20 20 8-20 8-8 20-8-20-20-8 20-8 8-20z" fill="#fff"/>
-  <text x="220" y="282" font-family="system-ui, -apple-system, sans-serif" font-size="52" font-weight="700" fill="#f8fafc">Rayyan AI</text>
+  <text x="220" y="282" font-family="system-ui, -apple-system, sans-serif" font-size="52" font-weight="700" fill="#f8fafc">Rayyan</text>
   <text x="220" y="332" font-family="system-ui, -apple-system, sans-serif" font-size="28" fill="#94a3b8">Your intelligent AI assistant</text>
-  <text x="72" y="540" font-family="system-ui, -apple-system, sans-serif" font-size="24" fill="#64748b">Chat with Rayyan AI  ·  Build apps with AI</text>
+  <text x="72" y="540" font-family="system-ui, -apple-system, sans-serif" font-size="24" fill="#64748b">Chat with Rayyan  ·  Build apps with AI</text>
 </svg>
