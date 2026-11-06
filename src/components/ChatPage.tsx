@@ -759,12 +759,6 @@ export default function ChatPage() {
 
         <div className="absolute bottom-0 left-0 right-0 p-3 border-t border-slate-800">
           <button
-            onClick={() => setShowLearningPanel((v) => !v)}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition"
-          >
-            <GraduationCap className="w-4 h-4" /> Learning
-          </button>
-          <button
             onClick={() => navigate("builder")}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition"
           >
