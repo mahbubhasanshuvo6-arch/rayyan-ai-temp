@@ -1274,7 +1274,7 @@ export default function ChatPage() {
                   value={interimText || input}
                   onChange={(e) => { setInput(e.target.value); setInterimText(""); }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       sendMessage();
                     }

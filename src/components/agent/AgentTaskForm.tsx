@@ -55,7 +55,6 @@ export default function AgentTaskForm({
           onChange={(e) => setTitle(e.target.value)}
           placeholder="e.g. Summarise recent security news"
           enterKeyHint="next"
-          autoComplete="off"
           autoCapitalize="sentences"
           className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-base text-slate-100 placeholder:text-slate-500 focus:border-sky-400 focus:outline-none disabled:opacity-50"
         />
@@ -71,7 +70,6 @@ export default function AgentTaskForm({
           onChange={(e) => setGoal(e.target.value)}
           placeholder="Describe what you want the agent to find, check or produce."
           enterKeyHint="done"
-          autoComplete="off"
           autoCapitalize="sentences"
           className="w-full resize-y rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-base leading-relaxed text-slate-100 placeholder:text-slate-500 focus:border-sky-400 focus:outline-none disabled:opacity-50"
         />
