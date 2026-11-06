@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { taskOutcome } from "./completion.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -684,7 +685,16 @@ async function runTask(admin: Admin, userId: string, taskId: string): Promise<Re
         .maybeSingle();
       if (stepErr) throw stepErr;
       if (!step) {
-        await finishTask(admin, userId, taskId);
+        const { data: outcomes, error: outcomesErr } = await admin
+          .from("agent_steps")
+          .select("status")
+          .eq("task_id", taskId);
+        if (outcomesErr) throw outcomesErr;
+        if (taskOutcome((outcomes ?? []).map((s) => s.status)) === "fail") {
+          await failTask(admin, userId, taskId, "No steps finished, so there is no result to show.");
+        } else {
+          await finishTask(admin, userId, taskId);
+        }
         break;
       }
 
