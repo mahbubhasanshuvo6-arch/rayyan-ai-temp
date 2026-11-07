@@ -204,7 +204,7 @@ function hasBengaliScriptCorruption(text: string): boolean {
 // scientific claims. If found, append a correction note so the user is not
 // misled even if the model ignored the system prompt's accuracy rules.
 // Returns the original text, or the text with an appended correction.
-const SCIENTIFIC_MISLEADING_PATTERNS: Array<{ pattern: RegExp; correction: string }> = [
+const SCIENTIFIC_MISLEADING_PATTERNS: Array<{ pattern: RegExp; correction: string; replace?: boolean }> = [
   {
     // "examine/try/test/compute/get all possibilities/answers at once"
     // Only matches the misleading readout myth, NOT the correct statement
@@ -223,39 +223,55 @@ const SCIENTIFIC_MISLEADING_PATTERNS: Array<{ pattern: RegExp; correction: strin
     correction: "\n\n---\n⚠️ সতর্কতা: অপ্টিমাইজেশন সমস্যার জন্য সার্বজনীন সূচকীয় কোয়ান্টাম সুবিধা প্রমাণিত নয়। গ্রোভারের অ্যালগরিদম বহুপদী সুবিধা দেয় (√N), এবং QAOA/VQE এর মতো ভ্যারিয়েশনাল অ্যালগরিদমগুলোর সুবিধা এখনও গবেষণার বিষয়।",
   },
   // ---- Bangladesh species confusion patterns ----
-  // Pattern 1: "দোয়েল" mentioned alongside Columbidae / dove / pigeon family.
-  // The model confuses the Bengali word "দোয়েল" (doel = magpie-robin) with
-  // the English word "dove" and places it in the wrong family.
+  // The model confuses দোয়েল (doel = magpie-robin) with "dove" and places
+  // it in family Columbidae instead of Muscicapidae. When this is detected,
+  // the entire answer is replaced — the wrong answer must NOT reach the user.
   {
-    pattern: /(?:দোয়েল|doel)[\s\S]{0,200}(?:Columbidae|কবুতরজাতীয়|পায়রা|ঘুঘু|dove(?:\s+family)?|pigeon(?:\s+family)?)/i,
-    correction: "\n\n---\n⚠️ সতর্কতা: উপরের উত্তরে দোয়েলকে কবুতর/ঘুঘু বা Columbidae পরিবারের সদস্য বলা হয়ে থাকলে তা ভুল। দোয়েল (Oriental Magpie-Robin) এর বৈজ্ঞানিক নাম Copsychus saularis এবং এটি Muscicapidae (Old World flycatchers) পরিবারের সদস্য — Columbidae (কবুতর/ঘুঘু) পরিবারের নয়।",
+    pattern: /(?:দোয়েল|doel)[\s\S]{0,200}(?:Columbidae|কবুতর(?:জাতীয়|বর্গ)?|পায়রা|ঘুঘু|dove(?:\s+family)?|pigeon(?:\s+family)?)/i,
+    correction: "দোয়েল (Doel) বাংলাদেশের জাতীয় পাখি। এটি Oriental Magpie-Robin নামে পরিচিত।\n\nবৈজ্ঞানিক নাম: Copsychus saularis\nপরিবার: Muscicapidae (Old World flycatchers)\nবর্গ: Passeriformes\n\nদোয়েল কবুতর বা ঘুঘু নয়। এটি Columbidae পরিবারের অন্তর্গত নয়। কবুতর ও ঘুঘু Columbidae পরিবারের সদস্য, কিন্তু দোয়েল Muscicapidae পরিবারের সদস্য — এটি একটি গান-পাখি (songbird)।",
+    replace: true,
   },
-  // Pattern 2: Wrong scientific name for doel (Streptopelia is a dove genus).
   {
     pattern: /(?:দোয়েল|doel|magpie.?robin)[\s\S]{0,200}Streptopelia/i,
-    correction: "\n\n---\n⚠️ সতর্কতা: উপরের উত্তরে দোয়েলের বৈজ্ঞানিক নাম হিসেবে Streptopelia উল্লেখ করা হয়ে থাকলে তা ভুল। Streptopelia হলো ঘুঘুর গণ। দোয়েলের সঠিক বৈজ্ঞানিক নাম Copsychus saularis (গণ: Copsychus, পরিবার: Muscicapidae)।",
+    correction: "দোয়েল (Doel) বাংলাদেশের জাতীয় পাখি। এটি Oriental Magpie-Robin নামে পরিচিত।\n\nবৈজ্ঞানিক নাম: Copsychus saularis\nপরিবার: Muscicapidae (Old World flycatchers)\nবর্গ: Passeriformes\n\nStreptopelia হলো ঘুঘুর গণ, দোয়েলের নয়। দোয়েলের সঠিক গণ হলো Copsychus, এবং পরিবার Muscicapidae।",
+    replace: true,
   },
-  // Pattern 3: Doel placed in Columbidae explicitly.
   {
     pattern: /(?:Copsychus\s+saularis|magpie.?robin)[\s\S]{0,200}Columbidae/i,
-    correction: "\n\n---\n⚠️ সতর্কতা: উপরের উত্তরে Copsychus saularis বা magpie-robin কে Columbidae পরিবারে রাখা হয়ে থাকলে তা ভুল। সঠিক পরিবার হলো Muscicapidae (Old World flycatchers)।",
+    correction: "দোয়েল (Doel) বাংলাদেশের জাতীয় পাখি। এটি Oriental Magpie-Robin নামে পরিচিত।\n\nবৈজ্ঞানিক নাম: Copsychus saularis\nপরিবার: Muscicapidae (Old World flycatchers)\nবর্গ: Passeriformes\n\nCopsychus saularis (magpie-robin) Columbidae পরিবারের অন্তর্গত নয়। সঠিক পরিবার হলো Muscicapidae।",
+    replace: true,
+  },
+  // Pattern: Doel called "Columba livia" (Rock Pigeon) — a specific wrong identification.
+  {
+    pattern: /(?:দোয়েল|doel)[\s\S]{0,200}Columba\s+livia/i,
+    correction: "দোয়েল (Doel) বাংলাদেশের জাতীয় পাখি। এটি Oriental Magpie-Robin নামে পরিচিত।\n\nবৈজ্ঞানিক নাম: Copsychus saularis\nপরিবার: Muscicapidae (Old World flycatchers)\nবর্গ: Passeriformes\n\nColumba livia হলো Rock Pigeon (পায়রা) — এটি দোয়েল নয়। দোয়েল একটি সম্পূর্ণ ভিন্ন প্রজাতি, ভিন্ন গণ (Copsychus), ভিন্ন পরিবার (Muscicapidae)।",
+    replace: true,
   },
 ];
 
 function scanScientificClaims(text: string): { corrected: boolean; text: string } {
-  // Only scan if the reply mentions quantum-related terms OR Bangladesh species.
   const isQuantumRelated = /(?:কোয়ান্টাম|quantum|qubit|সুপারপজিশন|superposition|শোর|shor|গ্রোভার|grover)/i.test(text);
-  const isSpeciesRelated = /(?:দোয়েল|doel|magpie.?robin|Copsychus|saularis|Columbidae|Streptopelia|ঘুঘু|পায়রা|কবুতর)/i.test(text);
+  const isSpeciesRelated = /(?:দোয়েল|doel|magpie.?robin|Copsychus|saularis|Columbidae|Streptopelia|Columba\s+livia|ঘুঘু|পায়রা|কবুতর)/i.test(text);
   if (!isQuantumRelated && !isSpeciesRelated) return { corrected: false, text };
 
   const matched: string[] = [];
-  for (const { pattern, correction } of SCIENTIFIC_MISLEADING_PATTERNS) {
+  let replacedText: string | null = null;
+  for (const { pattern, correction, replace } of SCIENTIFIC_MISLEADING_PATTERNS) {
     if (pattern.test(text)) {
-      matched.push(correction);
+      if (replace) {
+        replacedText = correction as string;
+      } else {
+        matched.push(correction as string);
+      }
     }
   }
+  // If a species-confusion pattern matched with replace=true, return the
+  // correct answer INSTEAD of the wrong one — the wrong answer does NOT
+  // reach the user.
+  if (replacedText) {
+    return { corrected: true, text: replacedText };
+  }
   if (matched.length === 0) return { corrected: false, text };
-  // Deduplicate corrections (same pattern might match multiple times).
   const unique = [...new Set(matched)];
   return { corrected: true, text: text + unique.join("") };
 }
