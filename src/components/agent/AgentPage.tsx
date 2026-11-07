@@ -31,7 +31,7 @@ function AgentWorkspace({ userId }: { userId: string }) {
     const ok = await agent.createTask(title, goal);
     setCreatingBusy(false);
     if (ok) setCreating(false);
-    else setCreateError("The task could not be created. Please try again.");
+    else setCreateError(agent.actionError ?? "The task could not be created. Please try again.");
     return ok;
   }
 
