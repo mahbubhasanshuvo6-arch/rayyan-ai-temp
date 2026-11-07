@@ -170,6 +170,10 @@ function isGarbageResponse(result: ProviderResult): boolean {
   // Very short non-substantive replies (under 10 chars, no sentence-ending
   // punctuation) are likely placeholder/garbage.
   if (text.length < 10 && !/[.!?।؟]/.test(text)) return true;
+  // Raw model-internal tool-call syntax (e.g. OpenRouter free models emit
+  // "<|tool_call_start|>[web_search(...)]<|tool_call_end|>" instead of text).
+  // These are synthetic tokens that no legitimate answer would contain.
+  if (/<\|tool_call_(?:start|end)\|>|<\|tool_calls?\|>|<\|start_header_id\|>|<\|end_header_id\|>/.test(text)) return true;
   // Known OpenRouter free-model placeholder/garbage patterns.
   const low = text.toLowerCase();
   if (/^(user safety|response safety|safety)\s*[:.]?\s*safe$/im.test(text)) return true;
@@ -177,8 +181,23 @@ function isGarbageResponse(result: ProviderResult): boolean {
   // Multi-line safety labels with no actual content (e.g. "User Safety: safe\nResponse Safety: safe")
   if (/^(user safety|response safety|safety|safe)\s*[:.]?\s*(safe|ok|done|yes|no)?(\n+(user safety|response safety|safety|safe)\s*[:.]?\s*(safe|ok|done|yes|no)?)*$/i.test(text)) return true;
   // Responses that are only a label with no actual content.
-  if (/^[a-z\s:]{1,25}$/i.test(text) && !/[.!?।؟]/.test(text)) return true;
+  if (/^[a-z\s:]{1,25}$/i.test(text) && !/[.!?।?]/.test(text)) return true;
+  // Bengali mixed-script corruption: a Bengali character immediately followed
+  // by a Latin letter within the same word (no space), e.g. "বangladesh".
+  // This is a model encoding glitch, not valid code-switching. Valid mixed
+  // text like "দোয়েল হলো Copsychus saularis" has spaces between scripts.
+  if (hasBengaliScriptCorruption(text)) return true;
   return false;
+}
+
+// Detect Bengali script corruption: Bengali Unicode chars ([\u0980-\u09FF])
+// directly adjacent to Latin letters ([a-zA-Z]) with no space between them.
+// Valid scientific names like "Copsychus saularis" are space-separated from
+// Bengali text, so they won't trigger this. We require at least 2 corrupted
+// adjacencies to avoid false positives from a single typo.
+function hasBengaliScriptCorruption(text: string): boolean {
+  const bengaliLatin = text.match(/[\u0980-\u09FF][a-zA-Z]|[a-zA-Z][\u0980-\u09FF]/g);
+  return bengaliLatin !== null && bengaliLatin.length >= 2;
 }
 
 // Post-generation safety net: scan the model's reply for known misleading
@@ -203,12 +222,31 @@ const SCIENTIFIC_MISLEADING_PATTERNS: Array<{ pattern: RegExp; correction: strin
     pattern: /(?:অপ্টিমাইজেশন|optimization).{0,30}(?:exponential|সূচকীয়ভাবে|সূচকীয়\s+দ্রুত)/i,
     correction: "\n\n---\n⚠️ সতর্কতা: অপ্টিমাইজেশন সমস্যার জন্য সার্বজনীন সূচকীয় কোয়ান্টাম সুবিধা প্রমাণিত নয়। গ্রোভারের অ্যালগরিদম বহুপদী সুবিধা দেয় (√N), এবং QAOA/VQE এর মতো ভ্যারিয়েশনাল অ্যালগরিদমগুলোর সুবিধা এখনও গবেষণার বিষয়।",
   },
+  // ---- Bangladesh species confusion patterns ----
+  // Pattern 1: "দোয়েল" mentioned alongside Columbidae / dove / pigeon family.
+  // The model confuses the Bengali word "দোয়েল" (doel = magpie-robin) with
+  // the English word "dove" and places it in the wrong family.
+  {
+    pattern: /(?:দোয়েল|doel)[\s\S]{0,200}(?:Columbidae|কবুতরজাতীয়|পায়রা|ঘুঘু|dove(?:\s+family)?|pigeon(?:\s+family)?)/i,
+    correction: "\n\n---\n⚠️ সতর্কতা: উপরের উত্তরে দোয়েলকে কবুতর/ঘুঘু বা Columbidae পরিবারের সদস্য বলা হয়ে থাকলে তা ভুল। দোয়েল (Oriental Magpie-Robin) এর বৈজ্ঞানিক নাম Copsychus saularis এবং এটি Muscicapidae (Old World flycatchers) পরিবারের সদস্য — Columbidae (কবুতর/ঘুঘু) পরিবারের নয়।",
+  },
+  // Pattern 2: Wrong scientific name for doel (Streptopelia is a dove genus).
+  {
+    pattern: /(?:দোয়েল|doel|magpie.?robin)[\s\S]{0,200}Streptopelia/i,
+    correction: "\n\n---\n⚠️ সতর্কতা: উপরের উত্তরে দোয়েলের বৈজ্ঞানিক নাম হিসেবে Streptopelia উল্লেখ করা হয়ে থাকলে তা ভুল। Streptopelia হলো ঘুঘুর গণ। দোয়েলের সঠিক বৈজ্ঞানিক নাম Copsychus saularis (গণ: Copsychus, পরিবার: Muscicapidae)।",
+  },
+  // Pattern 3: Doel placed in Columbidae explicitly.
+  {
+    pattern: /(?:Copsychus\s+saularis|magpie.?robin)[\s\S]{0,200}Columbidae/i,
+    correction: "\n\n---\n⚠️ সতর্কতা: উপরের উত্তরে Copsychus saularis বা magpie-robin কে Columbidae পরিবারে রাখা হয়ে থাকলে তা ভুল। সঠিক পরিবার হলো Muscicapidae (Old World flycatchers)।",
+  },
 ];
 
 function scanScientificClaims(text: string): { corrected: boolean; text: string } {
-  // Only scan if the reply mentions quantum-related terms.
+  // Only scan if the reply mentions quantum-related terms OR Bangladesh species.
   const isQuantumRelated = /(?:কোয়ান্টাম|quantum|qubit|সুপারপজিশন|superposition|শোর|shor|গ্রোভার|grover)/i.test(text);
-  if (!isQuantumRelated) return { corrected: false, text };
+  const isSpeciesRelated = /(?:দোয়েল|doel|magpie.?robin|Copsychus|saularis|Columbidae|Streptopelia|ঘুঘু|পায়রা|কবুতর)/i.test(text);
+  if (!isQuantumRelated && !isSpeciesRelated) return { corrected: false, text };
 
   const matched: string[] = [];
   for (const { pattern, correction } of SCIENTIFIC_MISLEADING_PATTERNS) {
@@ -1865,57 +1903,95 @@ Deno.serve(async (req: Request) => {
               "\n\nYou have already used the web search tool. The results are provided below. Now write a normal text answer with citations — do NOT emit any more tool blocks."
             ) + "\n\nDo NOT emit any ```tool``` blocks. Answer in plain text with inline citations.";
             try {
-              let followUp: ProviderResult;
-              if (result.provider === "gemini") {
-                const followContents = [
-                  ...contents,
-                  { role: "model", parts: [{ text: result.text }] },
-                  { role: "user", parts: [{ text: researchContext + citationInstruction }] },
-                ];
-                try {
-                  followUp = await callGemini(result.model, followSystem, followContents, s.temperature, s.max_tokens);
-                } catch (fe) {
-                  const ferr = fe as Error & { status?: number };
-                  // If Gemini fails on the follow-up, try Groq fallback if enabled.
-                  if (
-                    s.fallback_enabled &&
-                    s.fallback_provider === "groq" &&
-                    GROQ_KEY &&
-                    isRetryable(ferr.status ?? 0, ferr.message)
-                  ) {
-                    followUp = await callGroq(
-                      s.fallback_model,
+              // Build the list of providers to try for the follow-up answer.
+              // Each provider gets exactly ONE attempt. The original provider
+              // is tried first, then the other available providers in priority
+              // order. We never retry a provider that already failed.
+              const groqFollowModel = s.fallback_model || "qwen/qwen3.8-27b";
+              const followProviders: Array<{
+                name: string;
+                call: () => Promise<ProviderResult>;
+              }> = [];
+
+              // Gemini follow-up (contents-based).
+              if (GEMINI_KEY) {
+                const geminiModel = result.provider === "gemini" ? result.model : "gemini-3.8-flash";
+                followProviders.push({
+                  name: "gemini",
+                  call: async () => {
+                    const fc = [
+                      ...contents,
+                      { role: "model", parts: [{ text: result.text }] },
+                      { role: "user", parts: [{ text: researchContext + citationInstruction }] },
+                    ];
+                    return callGemini(geminiModel, followSystem, fc, s.temperature, s.max_tokens);
+                  },
+                });
+              }
+              // Groq follow-up (messages-based).
+              if (GROQ_KEY) {
+                followProviders.push({
+                  name: "groq",
+                  call: async () =>
+                    callGroq(
+                      result.provider === "groq" ? result.model : groqFollowModel,
                       followSystem + researchContext + citationInstruction,
                       [...history, { role: "user", content: enrichedMessage }],
                       s.temperature,
-                      s.max_tokens
-                    );
-                  } else {
-                    throw fe;
+                      s.max_tokens,
+                    ),
+                });
+              }
+              // OpenRouter as last resort.
+              if (OPENROUTER_KEY) {
+                followProviders.push({
+                  name: "openrouter",
+                  call: async () =>
+                    callOpenRouter(
+                      "openrouter/free",
+                      followSystem + researchContext + citationInstruction,
+                      [...history, { role: "user", content: enrichedMessage }],
+                      s.temperature,
+                      s.max_tokens,
+                    ),
+                });
+              }
+
+              // Sort: original provider first, then others in declared order.
+              followProviders.sort((a, b) => {
+                if (a.name === result.provider) return -1;
+                if (b.name === result.provider) return 1;
+                return 0;
+              });
+
+              let followUp: ProviderResult | null = null;
+              const followErrors: string[] = [];
+              for (const fp of followProviders) {
+                try {
+                  const candidate = await fp.call();
+                  // Check for garbage, tool-call syntax, or Bengali corruption.
+                  if (!isGarbageResponse(candidate)) {
+                    const cleaned = stripToolBlock(candidate.text);
+                    if (cleaned.trim()) {
+                      followUp = { ...candidate, text: cleaned };
+                      break;
+                    }
                   }
+                  followErrors.push(`${fp.name}: garbage or empty response`);
+                } catch (fe) {
+                  const ferr = fe as Error & { status?: number };
+                  followErrors.push(`${fp.name}: ${ferr.message}`);
                 }
-              } else {
-                // Groq follow-up: don't pass the raw tool-request text as an
-                // assistant message — the model would re-emit the tool block.
-                // Instead, frame this as a fresh user turn with the search
-                // results and the original question.
-                followUp = await callGroq(
-                  result.model,
-                  followSystem + researchContext + citationInstruction,
-                  [...history, { role: "user", content: enrichedMessage }],
-                  s.temperature,
-                  s.max_tokens
+              }
+
+              if (!followUp) {
+                throw new Error(
+                  `All follow-up providers failed: ${followErrors.join("; ")}`,
                 );
               }
-              // Strip any stray tool block the model might still emit.
-              let citedText = stripToolBlock(followUp.text);
-              // If the follow-up produced no usable text, fall back to raw
-              // search results so the user sees real sources (no invented
-              // citations).
-              if (!citedText.trim()) {
-                const rawResults = tav.results.map((r, i) => `${i + 1}. ${r.title}\n${r.url}`).join("\n\n");
-                citedText = `ওয়েব সার্চ সফল হয়েছে। নিচে প্রাপ্ত ফলাফল:\n\n${rawResults}`;
-              }
+
+              let citedText = followUp.text;
+
               // Apply continuation to the cited answer too.
               for (let cont = 0; cont < MAX_CONTINUATIONS; cont++) {
                 const isMax = followUp.finishReason === "MAX_TOKENS" || followUp.finishReason === "length";
@@ -1938,7 +2014,7 @@ Deno.serve(async (req: Request) => {
                     ];
                     followUp = await callGroq(followUp.model, followSystem + researchContext + citationInstruction, fh, s.temperature, s.max_tokens);
                   }
-                  citedText += followUp.text;
+                  citedText += stripToolBlock(followUp.text);
                 } catch {
                   break;
                 }
@@ -1960,9 +2036,10 @@ Deno.serve(async (req: Request) => {
               });
             } catch (e) {
               const err = e as Error & { status?: number };
-              // The search worked but the cited-answer generation failed.
-              // Return the raw search results as a fallback so the user sees them.
-              const fallbackText = `ওয়েব সার্চ সফল হয়েছে কিন্তু উত্তর তৈরি করতে সমস্যা হয়েছে। নিচে প্রাপ্ত ফলাফল:\n\n${tav.results.map((r, i) => `${i + 1}. ${r.title}\n${r.url}`).join("\n\n")}`;
+              // The search worked but all cited-answer generation providers
+              // failed or returned garbage. Return a clean Bengali message
+              // with the search sources — never raw tool-call syntax.
+              const fallbackText = `ওয়েব সার্চ সফল হয়েছে কিন্তু সব AI প্রোভাইডার উত্তর তৈরি করতে ব্যর্থ হয়েছে। নিচে প্রাপ্ত সোর্সগুলো দেখুন:\n\n${tav.results.map((r, i) => `${i + 1}. ${r.title}\n${r.url}`).join("\n\n")}\n\nঅনুগ্রহ করে এই লিংকগুলো থেকে নিজে তথ্য যাচাই করুন।`;
               void logUsage(supabase, result.provider, result.model, "chat", result.pt, result.ct, result.total, "error", err.message, userId, ownerLabel);
               return json({
                 reply: fallbackText,
