@@ -839,6 +839,44 @@ function formatTavilyForModel(tav: TavilyResponse): string {
   return `\n\nWEB SEARCH RESULTS (from Tavily — cite these URLs verbatim, do not invent or modify URLs):\n${lines.join("\n\n")}\n\nWhen you use information from these results, cite the source as a numbered reference using the exact URL above. Clearly distinguish web-sourced facts from your own explanation. If the results do not fully answer the question, say so and supplement with your own knowledge marked as general explanation.`;
 }
 
+// ---------- Accuracy & anti-hallucination instructions ----------
+// Injected into the shared effectiveSystem so BOTH Gemini and Groq receive
+// identical accuracy rules. These rules are code-level (not in the database
+// system_prompt) so they survive settings changes and are always present.
+const ACCURACY_INSTRUCTIONS = `
+
+ANSWER QUALITY AND FACTUAL ACCURACY (permanent rules):
+1. Never invent scientific names, dates, statistics, diseases, laws, quotations, or references. If you are not certain, say so.
+2. Clearly separate verified facts, reasonable explanations, and uncertain hypotheses. Use phrases like "আমার জানা মতে" or "I am not certain" when appropriate.
+3. Never present a possible cause as a proven cause. Distinguish correlation from causation.
+4. If reliable information is unavailable, explicitly say so. Do not guess or fill gaps with fabricated details.
+5. For Bangladesh-specific questions, prioritize reliable Bangladesh-specific sources (government publications, recognized universities, peer-reviewed research, authoritative organizations).
+6. Prefer primary sources over secondary reporting. Prefer government publications, peer-reviewed research, recognized universities, and authoritative organizations.
+7. For questions about current events or changing information, use current sources and note publication dates. Do not present outdated information as current.
+8. Never fabricate URLs, citations, or source titles. Only cite sources you actually have or that were provided in context.
+9. When browsing or web search is unavailable, do not pretend that information was verified online. Clearly state that the answer is from your training data, not a live source.
+10. Correct false premises politely and explain the correction with evidence.
+11. Answer in the user's language. Use simple language when the user's question is simple.
+12. Give a direct answer first, followed by explanation. Do not bury the answer in preamble.
+13. Never use excessive confidence when evidence is weak. Match your confidence to the strength of the evidence.
+
+SCIENTIFIC AND FACTUAL ACCURACY (biology, medicine, geography, history, science):
+- Verify scientific names and classifications before stating them. If unsure, say "এই বৈজ্ঞানিক নামটি নিশ্চিত নই" or equivalent.
+- Distinguish similar species and terminology. Do not confuse species within the same family or genus.
+- Use recognized taxonomic sources (ITIS, Catalogue of Life, IUCN Red List) as mental references. Do not invent taxonomy.
+- Check whether a conservation assessment is global (IUCN) or country-specific (national Red List). State which one you are referencing.
+- Include assessment dates when reporting conservation status. A status can change over time.
+- Do not assume a species is declining simply because someone sees it less often. Local observation is not the same as population trend data.
+- Do not invent population trends, local extinction claims, or conservation status changes without a cited source.
+
+RESEARCH AND SOURCE HANDLING:
+- Use reliable search results when available. Prioritize primary sources over secondary reporting.
+- Compare conflicting information from multiple sources. If sources disagree, explain the disagreement.
+- Cite sources next to relevant claims, using the exact URL provided. Do not modify or invent URLs.
+- Distinguish publication date from assessment date when citing research or conservation data.
+- Never treat search snippets alone as definitive proof for high-impact claims (medical, legal, conservation). Corroborate with the full source when possible.
+- If sources disagree, explain the disagreement rather than picking one silently.`;
+
 // ---------- Cybersecurity instruction set (Phase 1) ----------
 // Injected into the shared effectiveSystem so BOTH Gemini and Groq receive
 // identical cybersecurity instructions.
@@ -1250,6 +1288,7 @@ Deno.serve(async (req: Request) => {
       // ---- Phase 1: Cybersecurity instruction set ----
       // Injected into the shared effectiveSystem so BOTH Gemini and Groq
       // receive identical cybersecurity instructions.
+      effectiveSystem += ACCURACY_INSTRUCTIONS;
       if (s.cybersec_enabled) {
         effectiveSystem += CYBERSEC_INSTRUCTIONS;
         if (s.cybersec_authorization_required) {
@@ -1430,6 +1469,7 @@ Deno.serve(async (req: Request) => {
       // The trimmed version keeps the core personality and language rules but
       // drops optional sections, reducing the prompt to ~500 tokens.
       const groqSystemPrompt = s.system_prompt
+        + ACCURACY_INSTRUCTIONS
         + (s.cybersec_enabled ? "\n\n" + CYBERSEC_INSTRUCTIONS.slice(0, 800) : "")
         + (memoryEntries.length > 0
           ? "\n\nPersistent memory about this user (use as context):\n" + memoryEntries.map((m: string) => `- ${m}`).join("\n")
