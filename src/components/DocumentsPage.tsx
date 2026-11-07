@@ -40,11 +40,15 @@ export default function DocumentsPage() {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: qe } = await supabase
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userId = sessionData.session?.user.id;
+      const query = supabase
         .from("user_documents")
-        .select("id, user_id, owner_label, title, file_name, file_type, file_size, chunk_count, status, error_message, created_at, updated_at")
-        .eq("owner_label", ownerLabel)
-        .order("created_at", { ascending: false });
+        .select("id, user_id, owner_label, title, file_name, file_type, file_size, chunk_count, status, error_message, created_at, updated_at");
+      const { data, error: qe } = await (userId
+        ? query.eq("user_id", userId)
+        : query.eq("owner_label", ownerLabel)
+      ).order("created_at", { ascending: false });
       if (qe) {
         setError(qe.message);
       } else {
