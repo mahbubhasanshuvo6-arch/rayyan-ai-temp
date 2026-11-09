@@ -38,6 +38,7 @@ const GROQ_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
 const OPENROUTER_KEY = (Deno.env.get("OPENROUTER_API_KEY") ?? "").trim().replace(/^["'`]|["'`]$/g, "");
 const TAVILY_KEY = (Deno.env.get("TAVILY_API_KEY") ?? "").trim().replace(/^["'`]|["'`]$/g, "");
 const HF_TOKEN = (Deno.env.get("HF_TOKEN") ?? "").trim().replace(/^["'`]|["'`]$/g, "");
+const OLLAMA_KEY = (Deno.env.get("OLLAMA_API_KEY") ?? "").trim().replace(/^["'`]|["'`]$/g, "");
 
 // In-memory cooldown timestamps so we skip a provider that is known to be
 // rate-limited for a while, instead of wasting a fetch on every request.
@@ -78,6 +79,7 @@ const COST_TABLE: Record<string, { input: number; output: number }> = {
   "llama-3.1-8b-instant": { input: 0.00005, output: 0.00008 },
   "openrouter/free": { input: 0, output: 0 },
   "huggingface": { input: 0, output: 0 },
+  "deepseek-v4.1-flash": { input: 0.00014, output: 0.00028 },
 };
 
 function estimateCost(model: string, pt: number, ct: number): number {
@@ -325,6 +327,7 @@ const GEMINI_IMAGE_TIMEOUT_MS = 60000; // images need more time to upload/proces
 const GROQ_TIMEOUT_MS = 20000;
 const OPENROUTER_TIMEOUT_MS = 30000;
 const HF_TIMEOUT_MS = 30000;
+const OLLAMA_TIMEOUT_MS = 30000;
 
 async function callGemini(
   model: string,
@@ -612,6 +615,75 @@ async function callHuggingFace(
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
       const err = new Error("Hugging Face request timed out.") as Error & { status: number };
+      err.status = 504;
+      throw err;
+    }
+    throw e;
+  } finally {
+    clearTimeout(to);
+    if (signal) signal.removeEventListener("abort", onExternalAbort);
+  }
+}
+
+// ---------- Provider call: Ollama Cloud (OpenAI-compatible chat completions) ----------
+// Uses OLLAMA_API_KEY secret. Endpoint: https://ollama.com/v1/chat/completions
+// Auth: Bearer token. Default model: deepseek-v4.1-flash.
+// Token usage is tracked from the response's usage field when available.
+async function callOllama(
+  model: string,
+  systemPrompt: string,
+  history: Array<{ role: string; content: string }>,
+  temperature: number,
+  maxTokens: number,
+  signal?: AbortSignal
+): Promise<ProviderResult> {
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...history
+      .filter((m) => m.role !== "system")
+      .map((m) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: m.content,
+      })),
+  ];
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), OLLAMA_TIMEOUT_MS);
+  const onExternalAbort = () => ctrl.abort();
+  if (signal) signal.addEventListener("abort", onExternalAbort);
+  try {
+    const res = await fetch("https://ollama.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OLLAMA_KEY}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature,
+        max_tokens: maxTokens,
+      }),
+      signal: ctrl.signal,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = data?.error?.message ?? data?.error ?? `Ollama error ${res.status}`;
+      const err = new Error(typeof msg === "string" ? msg : JSON.stringify(msg)) as Error & { status: number };
+      err.status = res.status;
+      throw err;
+    }
+    const choice = data?.choices?.[0];
+    const finishReason = choice?.finish_reason ?? "stop";
+    const message = choice?.message ?? {};
+    const text = message.content ?? "";
+    const usage = data?.usage ?? {};
+    const pt = usage.prompt_tokens ?? 0;
+    const ct = usage.completion_tokens ?? 0;
+    const total = usage.total_tokens ?? pt + ct;
+    return { text, pt, ct, total, provider: "ollama", model, finishReason };
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      const err = new Error("Ollama request timed out.") as Error & { status: number };
       err.status = 504;
       throw err;
     }
@@ -1575,6 +1647,25 @@ Deno.serve(async (req: Request) => {
       } else if (primaryProvider === "groq" && !GROQ_KEY) {
         primaryErr = { status: 0, message: "GROQ_API_KEY not configured" };
         result = null as unknown as ProviderResult;
+      } else if (primaryProvider === "ollama" && OLLAMA_KEY) {
+        try {
+          result = await callOllama(
+            s.model, effectiveSystem,
+            [...history, { role: "user", content: enrichedMessage }],
+            s.temperature, s.max_tokens
+          );
+          if (isGarbageResponse(result)) {
+            primaryErr = { status: 502, message: "Ollama returned an empty or unusable response." };
+            result = null as unknown as ProviderResult;
+          }
+        } catch (e) {
+          const err = e as Error & { status?: number };
+          primaryErr = { status: err.status ?? 0, message: err.message };
+          result = null as unknown as ProviderResult;
+        }
+      } else if (primaryProvider === "ollama" && !OLLAMA_KEY) {
+        primaryErr = { status: 0, message: "OLLAMA_API_KEY not configured" };
+        result = null as unknown as ProviderResult;
       } else {
         // Default: Gemini primary (with deprecation-upgrade loop).
         let activeModel = s.model;
@@ -1809,6 +1900,12 @@ Deno.serve(async (req: Request) => {
             503
           );
         }
+        if (primaryErr?.message === "OLLAMA_API_KEY not configured") {
+          return json(
+            { error: "Ollama API key is not configured. An admin must add OLLAMA_API_KEY as a secret. Or change the provider to Gemini." },
+            503
+          );
+        }
         // Hugging Face credits exhausted — clear Bengali message, no retry.
         if (primaryErr?.status === 402 && primaryProvider === "huggingface") {
           return json(
@@ -1965,6 +2062,20 @@ Deno.serve(async (req: Request) => {
                   call: async () =>
                     callOpenRouter(
                       "openrouter/free",
+                      followSystem + researchContext + citationInstruction,
+                      [...history, { role: "user", content: enrichedMessage }],
+                      s.temperature,
+                      s.max_tokens,
+                    ),
+                });
+              }
+              // Ollama Cloud follow-up.
+              if (OLLAMA_KEY) {
+                followProviders.push({
+                  name: "ollama",
+                  call: async () =>
+                    callOllama(
+                      result.provider === "ollama" ? result.model : "deepseek-v4.1-flash",
                       followSystem + researchContext + citationInstruction,
                       [...history, { role: "user", content: enrichedMessage }],
                       s.temperature,
@@ -2211,7 +2322,51 @@ Deno.serve(async (req: Request) => {
       let result: ProviderResult;
       let primaryErr: { status: number; message: string } | null = null;
 
-      if (GEMINI_KEY) {
+      const buildPrimary = s.provider ?? "gemini";
+
+      if (buildPrimary === "ollama" && OLLAMA_KEY) {
+        try {
+          result = await callOllama(
+            s.model || "deepseek-v4.1-flash", buildSystem, [{ role: "user", content: prompt }], 0.4, 8192
+          );
+          if (isGarbageResponse(result)) {
+            primaryErr = { status: 502, message: "Ollama returned an empty or unusable response." };
+            result = null as unknown as ProviderResult;
+          }
+        } catch (e) {
+          const err = e as Error & { status?: number };
+          primaryErr = { status: err.status ?? 0, message: err.message };
+          result = null as unknown as ProviderResult;
+        }
+      } else if (buildPrimary === "huggingface" && HF_TOKEN) {
+        try {
+          result = await callHuggingFace(
+            s.model, buildSystem, [{ role: "user", content: prompt }], 0.4, 8192
+          );
+          if (isGarbageResponse(result)) {
+            primaryErr = { status: 502, message: "Hugging Face returned an empty or unusable response." };
+            result = null as unknown as ProviderResult;
+          }
+        } catch (e) {
+          const err = e as Error & { status?: number };
+          primaryErr = { status: err.status ?? 0, message: err.message };
+          result = null as unknown as ProviderResult;
+        }
+      } else if (buildPrimary === "groq" && GROQ_KEY) {
+        try {
+          result = await callGroq(
+            s.model, buildSystem, [{ role: "user", content: prompt }], 0.4, 8192
+          );
+          if (isGarbageResponse(result)) {
+            primaryErr = { status: 502, message: "Groq returned an empty or unusable response." };
+            result = null as unknown as ProviderResult;
+          }
+        } catch (e) {
+          const err = e as Error & { status?: number };
+          primaryErr = { status: err.status ?? 0, message: err.message };
+          result = null as unknown as ProviderResult;
+        }
+      } else if (GEMINI_KEY) {
         let activeModel = s.model;
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
@@ -2277,14 +2432,36 @@ Deno.serve(async (req: Request) => {
         } catch (e) {
           const err = e as Error & { status?: number };
           void logUsage(supabase, "openrouter", "openrouter/free", "app_builder", 0, 0, 0, "error", err.message, userId, ownerLabel);
-          return json({ error: "All AI providers are currently busy or rate-limited. Please try again in a minute." }, 503);
+          result = null as unknown as ProviderResult;
+        }
+      }
+
+      // Ollama Cloud fallback for app builder.
+      if (!result && primaryErr && OLLAMA_KEY) {
+        try {
+          result = await callOllama(
+            "deepseek-v4.1-flash", buildSystem, [{ role: "user", content: prompt }], 0.4, 8192
+          );
+        } catch (e) {
+          const err = e as Error & { status?: number };
+          void logUsage(supabase, "ollama", "deepseek-v4.1-flash", "app_builder", 0, 0, 0, "error", err.message, userId, ownerLabel);
+          result = null as unknown as ProviderResult;
         }
       }
 
       if (!result) {
-        void logUsage(supabase, "gemini", s.model, "app_builder", 0, 0, 0, "error", primaryErr?.message ?? "unknown", userId, ownerLabel);
+        void logUsage(supabase, s.provider ?? "gemini", s.model, "app_builder", 0, 0, 0, "error", primaryErr?.message ?? "unknown", userId, ownerLabel);
         if (primaryErr?.message === "GEMINI_API_KEY not configured") {
           return json({ error: "The AI provider key is not configured. An admin must add GEMINI_API_KEY." }, 503);
+        }
+        if (primaryErr?.message === "OLLAMA_API_KEY not configured") {
+          return json({ error: "Ollama API key is not configured. An admin must add OLLAMA_API_KEY as a secret." }, 503);
+        }
+        if (primaryErr?.message === "HF_TOKEN not configured") {
+          return json({ error: "Hugging Face token is not configured. An admin must add HF_TOKEN as a secret." }, 503);
+        }
+        if (primaryErr?.message === "GROQ_API_KEY not configured") {
+          return json({ error: "Groq API key is not configured. An admin must add GROQ_API_KEY as a secret." }, 503);
         }
         return json({ error: friendlyError(primaryErr?.status ?? 0, primaryErr?.message ?? "", false) }, 503);
       }

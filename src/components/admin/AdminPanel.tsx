@@ -638,11 +638,13 @@ function GeneralSettings() {
             set("provider", p);
             if (p === "huggingface") set("model", "meta-llama/Llama-3.3-70B-Instruct");
             else if (p === "groq") set("model", "openai/gpt-oss-120b");
+            else if (p === "ollama") set("model", "deepseek-v4.1-flash");
             else if (p === "gemini" && !form.model.startsWith("gemini")) set("model", "gemini-3.8-flash");
           }} className={inputCls}>
             <option value="gemini">Google Gemini</option>
             <option value="groq">Groq (Free)</option>
             <option value="huggingface">Hugging Face</option>
+            <option value="ollama">Ollama Cloud</option>
           </select>
         </Field>
         <Field label="Model">
