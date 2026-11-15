@@ -1,7 +1,7 @@
 {
-  "name": "Rayyan AI",
-  "short_name": "Rayyan AI",
-  "description": "Rayyan AI is an intelligent AI assistant that helps you chat, answer questions, and build simple web apps with the power of AI.",
+  "name": "Rayyan",
+  "short_name": "Rayyan",
+  "description": "Rayyan is an intelligent AI assistant that helps you chat, answer questions, and build simple web apps with the power of AI.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
