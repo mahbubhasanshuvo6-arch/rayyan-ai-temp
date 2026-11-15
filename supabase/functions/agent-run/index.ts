@@ -1,3 +1,4 @@
+// agent-run: plan-time tool validation removed; input validated at execution.
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { taskOutcome } from "./completion.ts";
 

@@ -6,12 +6,12 @@
       "hash": "4682e83b0dc55c09e6049658f2b5af04a9171dccb1aba9bc4c419201f3b0a91c"
     },
     "agent-run": {
-      "hasChanged": false,
-      "hash": "89ed826f34a9d792429f2bdacedc99d62f0e77da5c9d1a698126e8c21cdf5b1d"
+      "hasChanged": true,
+      "hash": "4a2b09274484f81a148d589bb81f74116345c36e04954ad9430753115bb11c1b"
     },
     "gemini-chat": {
       "hasChanged": false,
-      "hash": "5ad05247139c659696a172ba571ba1b42b0998294db8a3ff7f4ae6aef512c197"
+      "hash": "c1b5d0aa011f108789913226c4fb99b150adb451fd8df4a757f29459eb624c84"
     },
     "process-document": {
       "hasChanged": false,
